@@ -7,6 +7,9 @@ export const runtime = 'nodejs';
 
 const VALID_MODELS: DeepSeekModel[] = ['deepseek-chat', 'deepseek-reasoner'];
 
+type ToolCallChunk = { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown };
+type ToolResultChunk = { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
+
 export async function POST(request: NextRequest) {
   let messages: ChatMessage[];
   let model: DeepSeekModel;
@@ -32,6 +35,44 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const result = runAgent(messages, model);
-  return result.toTextStreamResponse();
+  const agentResult = runAgent(messages, model);
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const chunk of agentResult.fullStream) {
+          let event: Record<string, unknown> | null = null;
+
+          if (chunk.type === 'text-delta') {
+            event = { type: 'text', text: chunk.text };
+          } else if (chunk.type === 'tool-call') {
+            const tc = chunk as unknown as ToolCallChunk;
+            event = { type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input };
+          } else if (chunk.type === 'tool-result') {
+            const tr = chunk as unknown as ToolResultChunk;
+            event = { type: 'tool-result', toolCallId: tr.toolCallId, toolName: tr.toolName, output: tr.output };
+          }
+
+          if (event !== null) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          }
+        }
+        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Stream error';
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }

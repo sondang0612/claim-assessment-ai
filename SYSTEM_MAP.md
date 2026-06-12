@@ -107,10 +107,12 @@ DeepSeek reasons about what to do next
         ending with: <report>{ ... JSON ... }</report>
                 │
                 ▼
-        .toTextStreamResponse() → SSE stream to client
+        fullStream → custom SSE (text/tool-call/tool-result/done events)
                 │
-                ▼
-        Client parses <report> JSON → renders AssessmentReport
+                ▼  ChatContainer (client)
+        - text events → streaming MessageBubble
+        - tool-call/tool-result events → ToolCallLog
+        - done → parseReportFromText() → AssessmentReportView
 ```
 
 ---

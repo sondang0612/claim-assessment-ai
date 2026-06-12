@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-06-13
+
+### Added — UI (Phase 5)
+
+**API Route** (`app/api/agent/route.ts`) — UPDATED
+- Replaced `toTextStreamResponse()` with custom SSE stream from `fullStream`
+- Emits `{ type:'text', text }`, `{ type:'tool-call', toolCallId, toolName, input }`,
+  `{ type:'tool-result', toolCallId, toolName, output }`, `data: [DONE]` events
+- Error events emitted on stream failure
+
+**Chat Components** (`components/chat/`) — NEW
+- `ChatContainer.tsx` — state orchestrator; SSE client; holds messages, toolCalls, report, model
+- `MessageList.tsx` — scrollable message thread with auto-scroll; empty state
+- `MessageBubble.tsx` — user (blue, right) / assistant (white border, left) bubble with streaming cursor
+- `ChatInput.tsx` — textarea + model selector + Send/Stop button + 3 scenario quick-start buttons
+- `ToolCallLog.tsx` — collapsible panel showing each tool call status (calling/done/error) + expandable result JSON
+
+**Report Components** (`components/report/`) — NEW
+- `AssessmentReport.tsx` — full 6-section report: DocumentReview, PolicyVerification, MedicalNecessity, BenefitCalculation, Recommendation, PolicyCitations
+- `ReportSection.tsx` — collapsible section wrapper with title + icon
+- `RecommendationBadge.tsx` — color-coded badge: green (APPROVED), red (REJECTED), yellow (MORE_INFO_REQUIRED)
+
+**Page** (`app/page.tsx`) — UPDATED
+- Replaced Next.js boilerplate with `<ChatContainer />`
+
+**Layout** (`app/layout.tsx`) — UPDATED
+- Updated metadata title and description
+
+### Verified
+- `npm run build` — 0 errors (TypeScript + Turbopack)
+- `npm run lint` — 0 errors, 0 warnings
+
+---
+
 ## 2026-06-12
 
 ### Migration — Anthropic Claude → DeepSeek

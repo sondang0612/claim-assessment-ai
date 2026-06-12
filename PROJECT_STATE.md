@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Phases 1–4 Complete + Provider Migration Done — UI Next
+## Status: All Phases Complete — Build + Lint Passing
 
 ---
 
@@ -16,31 +16,26 @@
 - **T4** — AI SDK v6 tool schemas (`lib/agent/tools.ts`)
 - **T5** — System prompt with workflow + report format (`lib/agent/prompts.ts`)
 - **T6** — Agent runner with streaming + tool logging (`lib/agent/agent.ts`)
-- **T7** — Streaming API route with model selection (`app/api/agent/route.ts`)
+- **T7** — Streaming API route — custom SSE from `fullStream` (`app/api/agent/route.ts`)
 - **T8** — Report parser (`lib/report/generateReport.ts`)
 - **Migration** — Anthropic → DeepSeek provider (`lib/providers/deepseek.ts`)
+- **T9** — Chat components (`components/chat/`)
+- **T10** — Report components (`components/report/`)
+- **T11** — Page integration (`app/page.tsx`)
 - **T12** — All test scenarios (77 tests, 8 files, all passing)
-- **T13** — TypeScript + ESLint clean (0 errors)
+- **T13** — TypeScript + ESLint + Build all clean (0 errors)
 
 ---
 
 ## In Progress
 
-- (nothing — ready for Phase 5: UI)
+- (nothing)
 
 ---
 
 ## Todo
 
-### Phase 5 — UI
-- [ ] **T9** — Chat components  
-  `components/chat/` — ChatContainer, MessageList, MessageBubble, ChatInput, ToolCallLog
-
-- [ ] **T10** — Report components  
-  `components/report/` — AssessmentReport, ReportSection, RecommendationBadge
-
-- [ ] **T11** — Page integration  
-  `app/page.tsx` — mount `<ChatContainer />`
+- (nothing)
 
 ---
 
