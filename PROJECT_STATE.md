@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Planning Complete — Ready to Implement
+## Status: Phase 1–2 Complete — Agent Core Next
 
 ---
 
@@ -11,30 +11,29 @@
 - Architecture design (SYSTEM_MAP.md)
 - Folder structure definition
 - Implementation plan + task breakdown
+- **T1** — TypeScript type definitions (`types/`)
+- **T2** — Mock data layer (`lib/data/`)
+- **T3** — 4 tool function implementations (`lib/tools/`)
 
 ---
 
 ## In Progress
 
-- (nothing — planning phase complete)
+- (nothing — ready for Phase 3)
 
 ---
 
 ## Todo
 
-### Phase 1 — Foundation
-- [ ] **T1** — TypeScript type definitions  
-  Files: `types/agent.ts`, `types/claims.ts`, `types/policy.ts`, `types/report.ts`  
-  Defines: ChatMessage, ToolCall, Claim, Policy, Coverage, AssessmentReport, Recommendation
-
-- [ ] **T2** — Mock data layer  
-  Files: `lib/data/policies.ts`, `lib/data/documents.ts`, `lib/data/medicalCodes.ts`  
-  Content: 3 policies (POL-001 full, POL-002 elective-exclusion, POL-003 standard), documents per claim, ICD/CPT rules
-
 ### Phase 2 — Tool Layer
-- [ ] **T3** — Implement 4 tool functions  
-  Files: `lib/tools/lookupPolicy.ts`, `lib/tools/calculateBenefit.ts`, `lib/tools/verifyDocument.ts`, `lib/tools/checkMedicalNecessity.ts`  
-  Each queries mock data and returns typed results; no external calls
+- [x] **T1** — TypeScript type definitions  
+  `types/agent.ts`, `types/claims.ts`, `types/policy.ts`, `types/report.ts`
+
+- [x] **T2** — Mock data layer  
+  `lib/data/policies.ts` (3 policies), `lib/data/documents.ts`, `lib/data/medicalCodes.ts`, `lib/data/claims.ts`
+
+- [x] **T3** — 4 tool function implementations  
+  `lib/tools/lookupPolicy.ts`, `lib/tools/calculateBenefit.ts`, `lib/tools/verifyDocument.ts`, `lib/tools/checkMedicalNecessity.ts`
 
 - [ ] **T4** — Vercel AI SDK tool schemas  
   File: `lib/agent/tools.ts`  
@@ -56,31 +55,21 @@
 ### Phase 4 — Report
 - [ ] **T8** — Report parser  
   File: `lib/report/generateReport.ts`  
-  Exports `parseReportFromText(text: string): AssessmentReport | null`  
-  Extracts `<report>…</report>` JSON block from final assistant message
+  Exports `parseReportFromText(text: string): AssessmentReport | null`
 
 ### Phase 5 — UI
 - [ ] **T9** — Chat components  
-  Files: `components/chat/ChatContainer.tsx`, `MessageList.tsx`, `MessageBubble.tsx`, `ChatInput.tsx`, `ToolCallLog.tsx`  
-  ChatContainer manages state; streams via fetch + ReadableStream; passes chunks to child components
+  `components/chat/` — ChatContainer, MessageList, MessageBubble, ChatInput, ToolCallLog
 
 - [ ] **T10** — Report components  
-  Files: `components/report/AssessmentReport.tsx`, `ReportSection.tsx`, `RecommendationBadge.tsx`  
-  Renders parsed AssessmentReport JSON; badge is color-coded (green/red/yellow)
+  `components/report/` — AssessmentReport, ReportSection, RecommendationBadge
 
 - [ ] **T11** — Page integration  
-  File: `app/page.tsx`  
-  Mounts `<ChatContainer />`; removes Next.js boilerplate
+  `app/page.tsx`
 
 ### Phase 6 — Validation
-- [ ] **T12** — Manual test of 3 scenarios  
-  Scenario A: Approval (POL-001, appendicitis)  
-  Scenario B: Rejection (POL-002, elective cosmetic)  
-  Scenario C: More Info (POL-003, missing document)
-
-- [ ] **T13** — TypeScript + ESLint clean pass  
-  `npm run build` passes with zero TS errors  
-  `npm run lint` passes with zero ESLint errors
+- [ ] **T12** — Manual test of 3 scenarios (Approval / Rejection / More Info)
+- [ ] **T13** — TypeScript + ESLint clean pass
 
 ---
 
@@ -112,28 +101,6 @@ npm install ai @ai-sdk/anthropic zod
 
 ---
 
-## Architecture Overview
-
-```
-Browser
-  └─ ChatContainer (state)
-      ├─ MessageList → MessageBubble
-      ├─ ToolCallLog
-      └─ AssessmentReport → ReportSection + RecommendationBadge
-
-Server
-  └─ POST /api/agent/route.ts
-      └─ lib/agent/agent.ts  (streamText + tools)
-          ├─ lib/agent/prompts.ts
-          ├─ lib/agent/tools.ts  (Zod schemas)
-          └─ lib/tools/*.ts  →  lib/data/*.ts
-
-Types
-  └─ types/{agent,claims,policy,report}.ts
-```
-
----
-
 ## Test Scenario Data
 
 | Scenario | Claim ID | Policy | Key Trigger | Expected Outcome |
@@ -141,3 +108,27 @@ Types
 | Approval | CLM-001 | POL-001 | All docs valid, appendicitis | APPROVED — $4,500 benefit |
 | Rejection | CLM-002 | POL-002 | Elective procedure exclusion | REJECTED — not medically necessary |
 | More Info | CLM-003 | POL-003 | Missing itemized bill (DOC-003) | MORE_INFO_REQUIRED |
+
+---
+
+## Domain Layer — File Reference
+
+```
+types/
+  agent.ts        ChatMessage, ToolCall, AgentState
+  claims.ts       ClaimType, DocumentType, DocumentStatus, Document, Claim
+  policy.ts       PolicyStatus, Coverage, Exclusion, Policy
+  report.ts       Recommendation, AssessmentReport + section interfaces
+
+lib/data/
+  policies.ts     POLICIES record + getPolicyById()
+  documents.ts    DOCUMENTS record + getDocumentById() + getDocumentsByClaimId()
+  medicalCodes.ts MEDICAL_NECESSITY_RULES + findNecessityRule()
+  claims.ts       CLAIMS record + getClaimById()  (3 test scenarios)
+
+lib/tools/
+  lookupPolicy.ts           lookupPolicy(input) → Policy | error
+  calculateBenefit.ts       calculateBenefit(input) → amounts | error
+  verifyDocument.ts         verifyDocument(input) → validity + issues | error
+  checkMedicalNecessity.ts  checkMedicalNecessity(input) → necessity + rationale
+```
