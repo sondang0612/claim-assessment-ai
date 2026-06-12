@@ -13,10 +13,10 @@
 │  │  │   ├─ MessageList.tsx  (user + assistant messages) │  │
 │  │  │   ├─ MessageBubble.tsx (individual message)       │  │
 │  │  │   ├─ ChatInput.tsx    (text input + send)         │  │
-│  │  │   └─ ToolCallLog.tsx  (tool call visibility)      │  │
+│  │  │   └─ ToolCallLog.tsx  (tool call trace panel)     │  │
 │  │  └─ components/report/AssessmentReport.tsx           │  │
 │  │      ├─ ReportSection.tsx (collapsible section)      │  │
-│  │      └─ RecommendationBadge.tsx (Approve/Reject/…)   │  │
+│  │      └─ RecommendationBadge.tsx (APPROVED/…)         │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                           │ POST /api/agent (SSE stream)     │
 └───────────────────────────┼─────────────────────────────────┘
@@ -26,11 +26,20 @@
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Application Layer                                    │  │
-│  │  app/api/agent/route.ts   ← POST handler             │  │
-│  │  lib/agent/agent.ts       ← streamText + tool loop   │  │
-│  │  lib/agent/prompts.ts     ← system prompt            │  │
-│  │  lib/agent/tools.ts       ← Vercel AI SDK schemas    │  │
+│  │  app/api/agent/route.ts  ← POST, model selection     │  │
+│  │  lib/agent/agent.ts      ← streamText + tool loop    │  │
+│  │  lib/agent/prompts.ts    ← system prompt             │  │
+│  │  lib/agent/tools.ts      ← AI SDK v6 inputSchema     │  │
 │  │  lib/report/generateReport.ts ← parse <report> JSON  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                           │                                  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Provider Layer                                       │  │
+│  │  lib/providers/deepseek.ts                           │  │
+│  │  ├─ createDeepSeekProvider(apiKey?)                  │  │
+│  │  │   → createOpenAI({ name, baseURL, apiKey })       │  │
+│  │  └─ getDeepSeekModel(model)                         │  │
+│  │       → provider.chat('deepseek-chat' | '…reasoner') │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                           │                                  │
 │  ┌──────────────────────────────────────────────────────┐  │
@@ -46,20 +55,24 @@
 │  │  lib/data/policies.ts     ← 3 mock policies          │  │
 │  │  lib/data/documents.ts    ← mock documents per claim │  │
 │  │  lib/data/medicalCodes.ts ← ICD/CPT necessity rules  │  │
+│  │  lib/data/claims.ts       ← 3 test scenario claims   │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Type Layer                                           │  │
-│  │  types/agent.ts    ← Message, ToolCall, AgentState   │  │
+│  │  types/agent.ts    ← ChatMessage, ToolCall           │  │
 │  │  types/claims.ts   ← Claim, ClaimType, Document      │  │
 │  │  types/policy.ts   ← Policy, Coverage, Exclusion     │  │
-│  │  types/report.ts   ← AssessmentReport, Section       │  │
+│  │  types/report.ts   ← AssessmentReport, Recommendation│  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│              Anthropic API (claude-sonnet-4-6)               │
-│              via Vercel AI SDK — streamText()                │
+│      DeepSeek API  (OpenAI-compatible chat completions)      │
+│      baseURL: https://api.deepseek.com                       │
+│      Auth:    DEEPSEEK_API_KEY                               │
+│      Models:  deepseek-chat (default) · deepseek-reasoner    │
+│      SDK:     @ai-sdk/openai  →  .chat(modelId)              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,10 +84,14 @@
 User submits claim details
         │
         ▼
-POST /api/agent  →  streamText(model, messages, tools)
+POST /api/agent  { messages, model? }
         │
+        ▼  runAgent(messages, model)
+lib/agent/agent.ts
+        │  streamText(getDeepSeekModel(model), system, messages, tools)
+        │  stopWhen: stepCountIs(10)
         ▼
-Claude reasons about what to do next
+DeepSeek reasons about what to do next
         │
         ├─ tool_call: verifyDocument(documentId)
         │       ↓ result → fed back into messages
@@ -86,11 +103,11 @@ Claude reasons about what to do next
                 ↓ result → fed back into messages
                 │
                 ▼
-        Claude generates final text response
+        DeepSeek generates final text response
         ending with: <report>{ ... JSON ... }</report>
                 │
                 ▼
-        Stream SSE chunks to client
+        .toTextStreamResponse() → SSE stream to client
                 │
                 ▼
         Client parses <report> JSON → renders AssessmentReport
@@ -103,75 +120,77 @@ Claude reasons about what to do next
 ```
 claim-assessment-ai/
 ├── app/
-│   ├── api/
-│   │   └── agent/
-│   │       └── route.ts            # POST /api/agent — streaming endpoint
+│   ├── api/agent/route.ts          # POST /api/agent — model-aware streaming endpoint
 │   ├── layout.tsx
-│   ├── page.tsx                    # Main page — mounts ChatContainer
+│   ├── page.tsx                    # Main page
 │   └── globals.css
 │
 ├── components/
 │   ├── chat/
-│   │   ├── ChatContainer.tsx       # State orchestrator; holds messages + report
+│   │   ├── ChatContainer.tsx       # State orchestrator
 │   │   ├── MessageList.tsx         # Scrollable message thread
 │   │   ├── MessageBubble.tsx       # Single message (user | assistant)
 │   │   ├── ChatInput.tsx           # Textarea + submit button
 │   │   └── ToolCallLog.tsx         # Collapsible tool call trace panel
 │   └── report/
 │       ├── AssessmentReport.tsx    # Full 6-section report wrapper
-│       ├── ReportSection.tsx       # Individual section with heading + body
+│       ├── ReportSection.tsx       # Individual section
 │       └── RecommendationBadge.tsx # APPROVED | REJECTED | MORE INFO badge
 │
 ├── lib/
+│   ├── providers/
+│   │   └── deepseek.ts             # DeepSeek provider via @ai-sdk/openai
 │   ├── agent/
-│   │   ├── agent.ts                # runAgent() — wraps streamText, exposes stream
-│   │   ├── prompts.ts              # SYSTEM_PROMPT constant
-│   │   └── tools.ts                # Tool definitions (Vercel AI SDK format)
+│   │   ├── agent.ts                # runAgent(messages, model) → streamText
+│   │   ├── prompts.ts              # SYSTEM_PROMPT
+│   │   └── tools.ts                # agentTools (AI SDK v6 inputSchema)
 │   ├── data/
 │   │   ├── policies.ts             # Mock Policy records
 │   │   ├── documents.ts            # Mock Document records
-│   │   └── medicalCodes.ts         # Mock ICD/CPT necessity rules
+│   │   ├── medicalCodes.ts         # ICD/CPT necessity rules
+│   │   └── claims.ts               # 3 test scenario claims
 │   ├── report/
-│   │   └── generateReport.ts       # parseReportFromText() — extracts JSON
+│   │   └── generateReport.ts       # parseReportFromText()
 │   └── tools/
 │       ├── lookupPolicy.ts
 │       ├── calculateBenefit.ts
 │       ├── verifyDocument.ts
 │       └── checkMedicalNecessity.ts
 │
-└── types/
-    ├── agent.ts                    # ChatMessage, ToolCall, AgentState
-    ├── claims.ts                   # Claim, ClaimType, Document, DocumentStatus
-    ├── policy.ts                   # Policy, Coverage, Exclusion, PolicyStatus
-    └── report.ts                   # AssessmentReport, ReportSection, Recommendation
+├── types/
+│   ├── agent.ts                    # ChatMessage, ToolCall, AgentState
+│   ├── claims.ts                   # ClaimType, Document, Claim
+│   ├── policy.ts                   # Policy, Coverage, Exclusion
+│   └── report.ts                   # AssessmentReport, Recommendation
+│
+└── __tests__/
+    ├── scenario-a-approval.test.ts
+    ├── scenario-b-rejection.test.ts
+    ├── scenario-c-more-info.test.ts
+    ├── report.test.ts
+    ├── provider-deepseek.test.ts   # Provider config + model selection
+    ├── claim-flow.test.ts          # End-to-end workflow per scenario
+    ├── tool-execution.test.ts      # Tool edge cases + boundary math
+    └── report-citations.test.ts    # Report round-trip + citation source validation
 ```
 
 ---
 
-## Data Flow
+## DeepSeek Provider
 
 ```
-User Input (claim details)
-    │
-    ▼  POST body: { messages: ChatMessage[] }
-app/api/agent/route.ts
-    │
-    ▼  runAgent(messages)
-lib/agent/agent.ts  ←  lib/agent/prompts.ts
-    │                  lib/agent/tools.ts
-    │
-    ▼  tool invocations
-lib/tools/*.ts  ←  lib/data/*.ts
-    │
-    ▼  StreamData chunks (text + toolResult events)
-HTTP SSE response
-    │
-    ▼  useChat() / fetch + ReadableStream
-components/chat/ChatContainer.tsx
-    │
-    ├─► MessageList + MessageBubble    (streaming text)
-    ├─► ToolCallLog                    (tool trace)
-    └─► AssessmentReport               (parsed <report> JSON)
+lib/providers/deepseek.ts
+
+DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
+DEFAULT_MODEL     = 'deepseek-chat'
+
+createDeepSeekProvider(apiKey?)
+    → createOpenAI({ name: 'deepseek', baseURL, apiKey })
+    → returns OpenAIProvider (callable, with .chat(), .completion(), …)
+
+getDeepSeekModel(model = 'deepseek-chat')
+    → createDeepSeekProvider().chat(model)
+    → returns LanguageModelV3 for use in streamText / generateText
 ```
 
 ---
@@ -180,10 +199,10 @@ components/chat/ChatContainer.tsx
 
 | Tool | Input | Returns |
 |---|---|---|
-| `lookupPolicy` | `{ policyId: string }` | `Policy \| { error: string }` |
-| `calculateBenefit` | `{ policyId, claimType, amount }` | `{ covered, patientResponsibility, details }` |
-| `verifyDocument` | `{ documentId: string }` | `{ valid, issues, documentType }` |
-| `checkMedicalNecessity` | `{ diagnosis, procedures: string[] }` | `{ necessary, rationale, codes }` |
+| `verifyDocument` | `{ documentId }` | `{ valid, documentType, provider, issuedDate, issues }` \| error |
+| `lookupPolicy` | `{ policyId }` | `{ policy: Policy }` \| error |
+| `checkMedicalNecessity` | `{ diagnosis, procedures[] }` | `{ necessary, rationale, approvedProcedures, unapprovedProcedures }` |
+| `calculateBenefit` | `{ policyId, claimType, amount }` | `{ coveredAmount, patientResponsibility, deductibleApplied, coveragePercent }` \| error |
 
 ---
 
@@ -193,15 +212,15 @@ components/chat/ChatContainer.tsx
 {
   "claimId": "string",
   "patientName": "string",
-  "assessmentDate": "ISO date string",
+  "assessmentDate": "YYYY-MM-DD",
   "recommendation": "APPROVED | REJECTED | MORE_INFO_REQUIRED",
   "sections": {
-    "documentReview": { "summary": "string", "findings": [] },
-    "policyVerification": { "summary": "string", "policyId": "string", "coverageDetails": {} },
-    "medicalNecessity": { "summary": "string", "necessary": true, "rationale": "string" },
-    "benefitCalculation": { "summary": "string", "coveredAmount": 0, "patientResponsibility": 0 },
-    "recommendation": { "decision": "APPROVED", "reasoning": "string" },
-    "policyCitations": [{ "section": "string", "text": "string" }]
+    "documentReview":    { "summary": "string", "findings": [] },
+    "policyVerification":{ "summary": "string", "policyId": "string", "coverageDetails": {} },
+    "medicalNecessity":  { "summary": "string", "necessary": true, "rationale": "string" },
+    "benefitCalculation":{ "summary": "string", "coveredAmount": 0, "patientResponsibility": 0 },
+    "recommendation":    { "decision": "APPROVED", "reasoning": "string" },
+    "policyCitations":   [{ "section": "string", "text": "string" }]
   }
 }
 ```
@@ -212,6 +231,6 @@ components/chat/ChatContainer.tsx
 
 | Scenario | Policy | Documents | Medical Necessity | Outcome |
 |---|---|---|---|---|
-| T1 — Approval | POL-001 (full coverage) | All valid | Appendicitis — necessary | APPROVED, $4,500 benefit |
-| T2 — Rejection | POL-002 (excludes elective) | Valid | Elective cosmetic — not necessary | REJECTED |
-| T3 — More Info | POL-003 (standard) | Missing itemized bill | N/A | MORE_INFO_REQUIRED |
+| CLM-001 — Approval | POL-001 (full, deductible met) | DOC-001, DOC-002 (all valid) | appendicitis — necessary | APPROVED, $4,500 |
+| CLM-002 — Rejection | POL-002 (elective excluded) | DOC-004, DOC-005 (valid) | elective cosmetic — not necessary | REJECTED |
+| CLM-003 — More Info | POL-003 (standard plus) | DOC-006 (valid), DOC-003 (missing) | fracture — necessary | MORE_INFO_REQUIRED |

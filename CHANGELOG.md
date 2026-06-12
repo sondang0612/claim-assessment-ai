@@ -2,58 +2,60 @@
 
 ## 2026-06-12
 
-### Added — Domain Layer
+### Migration — Anthropic Claude → DeepSeek
 
-**Types** (`types/`)
-- `agent.ts` — `ChatMessage`, `ToolCall`, `AgentState`
-- `claims.ts` — `ClaimType`, `DocumentType`, `DocumentStatus`, `Document`, `Claim`
-- `policy.ts` — `PolicyStatus`, `Coverage`, `Exclusion`, `Policy`
-- `report.ts` — `Recommendation`, `AssessmentReport` and all 6 section interfaces
+**Provider** (`lib/providers/deepseek.ts`) — NEW
+- `createDeepSeekProvider(apiKey?)` — factory using `@ai-sdk/openai` with `baseURL: https://api.deepseek.com`
+- `getDeepSeekModel(model)` — returns `LanguageModelV3` via `.chat()` (OpenAI chat completions endpoint)
+- `DeepSeekModel` type: `'deepseek-chat' | 'deepseek-reasoner'`
+- `DEFAULT_MODEL = 'deepseek-chat'`
 
-**Mock Data** (`lib/data/`)
-- `policies.ts` — 3 mock policies (POL-001 full coverage, POL-002 elective exclusion, POL-003 standard plus)
-- `documents.ts` — 6 mock documents covering all 3 test scenarios (including 1 missing document)
-- `medicalCodes.ts` — ICD/CPT necessity rules for appendicitis, cosmetic procedures, and fractures
-- `claims.ts` — 3 test scenario claims (CLM-001, CLM-002, CLM-003)
+**Agent** (`lib/agent/agent.ts`) — UPDATED
+- Removed `@ai-sdk/anthropic` import
+- Replaced `anthropic('claude-sonnet-4-6')` with `getDeepSeekModel(model)`
+- Added `model: DeepSeekModel` parameter to `runAgent()` (defaults to `deepseek-chat`)
+- Added model name to `onStepFinish` log output
 
-**Tool Implementations** (`lib/tools/`)
-- `lookupPolicy.ts` — looks up policy by ID; returns typed `Policy` or error
-- `calculateBenefit.ts` — exclusion check → coverage lookup → deductible → coverage % → cap at maxBenefit
-- `verifyDocument.ts` — validates document status and returns issues list
-- `checkMedicalNecessity.ts` — matches diagnosis to necessity rules; identifies unapproved procedures
+**API Route** (`app/api/agent/route.ts`) — UPDATED
+- Accepts optional `"model"` field in POST body (`deepseek-chat` | `deepseek-reasoner`)
+- Validates model against allowlist; falls back to `DEFAULT_MODEL` if invalid/absent
 
-### Added — Agent Core
+**Installed**
+- `@ai-sdk/openai@3.0.71` — OpenAI-compatible provider SDK
 
-**Agent** (`lib/agent/`)
-- `prompts.ts` — `SYSTEM_PROMPT` with strict workflow order (verify docs → policy → necessity → benefit), anti-hallucination rules, `<report>` JSON format
-- `tools.ts` — `agentTools` wrapping all 4 tool functions with Zod `inputSchema` (AI SDK v6 API)
-- `agent.ts` — `runAgent(messages)` using `streamText`, `stopWhen: stepCountIs(10)`, and `onStepFinish` logging
+### Added — Tests (4 new files, 51 new tests)
 
-**Report** (`lib/report/`)
-- `generateReport.ts` — `parseReportFromText(text)` extracts `<report>…</report>` JSON block
-
-**API Route** (`app/api/agent/`)
-- `route.ts` — `POST /api/agent` streaming endpoint; returns `toTextStreamResponse()`
-
-### Added — Tests
-
-- `vitest.config.ts` — Vitest config with `@/` path alias resolution
-- `__tests__/scenario-a-approval.test.ts` — 5 tests: Approval scenario (CLM-001, POL-001)
-- `__tests__/scenario-b-rejection.test.ts` — 5 tests: Rejection scenario (CLM-002, POL-002)
-- `__tests__/scenario-c-more-info.test.ts` — 5 tests: More Info scenario (CLM-003, POL-003)
-- `__tests__/report.test.ts` — 7 tests: `parseReportFromText` edge cases
-
-### Fixed — AI SDK v6 Compatibility
-- `parameters` → `inputSchema` in all tool definitions (breaking change in AI SDK v6)
-- `maxSteps` → `stopWhen: stepCountIs(10)` (breaking change in AI SDK v6)
-- `toDataStreamResponse()` → `toTextStreamResponse()` (breaking change in AI SDK v6)
-- `call.args` → `call.toolName` in `onStepFinish` callback (field renamed in AI SDK v6)
+- `provider-deepseek.test.ts` (11) — Provider config, model selection, LanguageModelV3 shape validation
+- `claim-flow.test.ts` (14) — End-to-end workflow for all 3 scenarios with `deriveRecommendation` helper
+- `tool-execution.test.ts` (21) — Tool edge cases: unknown IDs, deductible math, maxBenefit cap, unapproved procedures, empty deductible
+- `report-citations.test.ts` (9) — Report round-trip fidelity, policy citation source text validation, multi-citation ordering
 
 ### Verified
 - `npx tsc --noEmit` — 0 errors (strict mode)
-- `npx vitest run` — 26/26 tests passing
+- `npx vitest run` — 77/77 tests passing across 8 test files
 
-### Added — Initial Project Setup (earlier)
-- Next.js 16 + Tailwind CSS v4 scaffolding
-- Requirements analysis (`AGENTS.md`)
-- Architecture design (`SYSTEM_MAP.md`, `PROJECT_STATE.md`)
+---
+
+### Added — Domain Layer (earlier in session)
+
+**Types** (`types/`)
+- `agent.ts`, `claims.ts`, `policy.ts`, `report.ts`
+
+**Mock Data** (`lib/data/`)
+- `policies.ts`, `documents.ts`, `medicalCodes.ts`, `claims.ts`
+
+**Tool Implementations** (`lib/tools/`)
+- `lookupPolicy.ts`, `calculateBenefit.ts`, `verifyDocument.ts`, `checkMedicalNecessity.ts`
+
+### Added — Agent Core (earlier in session)
+
+- `lib/agent/prompts.ts` — workflow-enforcing system prompt + `<report>` format
+- `lib/agent/tools.ts` — AI SDK v6 `inputSchema`-based tool definitions
+- `lib/report/generateReport.ts` — `parseReportFromText()`
+- `app/api/agent/route.ts` — streaming POST endpoint
+
+### Fixed — AI SDK v6 Compatibility (earlier in session)
+- `parameters` → `inputSchema`
+- `maxSteps` → `stopWhen: stepCountIs(N)`
+- `toDataStreamResponse()` → `toTextStreamResponse()`
+- `call.args` → `call.toolName` in `onStepFinish`
