@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import type { AssessmentReport } from "@/types/report";
+import type { WorkflowEvent } from "@/types/workflow";
 import type { ToolCallEntry } from "./ToolCallLog";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
@@ -15,13 +16,11 @@ interface Message {
   content: string;
 }
 
-interface AgentResponse {
-  messageClass?: 'claim_request' | 'greeting' | 'help_request' | 'unsupported';
-  report?: AssessmentReport;
-  toolCalls?: ToolCallEntry[];
-  summary?: string;
-  error?: string;
-}
+/**
+ * Characters revealed per animation frame (~60 fps → ~300 chars/sec).
+ * Increasing this makes typing feel faster; decreasing makes it slower.
+ */
+const CHARS_PER_FRAME = 5;
 
 export default function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -29,16 +28,37 @@ export default function ChatContainer() {
   const [report, setReport] = useState<AssessmentReport | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [model, setModel] = useState<DeepSeekModel>("deepseek-chat");
+
   const abortRef = useRef<AbortController | null>(null);
+
+  // ── Typing-queue refs ────────────────────────────────────────────────────────
+  // These are shared between the async SSE reader and the synchronous RAF loop.
+  // Refs are used here instead of state to avoid stale-closure issues — both
+  // sides mutate them in-place and read the latest values directly.
+  const pendingRef      = useRef("");          // text waiting to be revealed
+  const displayedRef    = useRef("");          // text currently shown in the bubble
+  const baseMessagesRef = useRef<Message[]>([]); // history snapshot (no assistant slot)
+  const rafIdRef        = useRef<number | null>(null);
+  const typingActiveRef = useRef(false);
 
   const sendMessage = useCallback(
     async (content: string) => {
       if (isStreaming || !content.trim()) return;
 
+      // ── Reset typing state from any previous turn ──────────────────────────
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingRef.current   = "";
+      displayedRef.current = "";
+      typingActiveRef.current = false;
+
       const userMsg: Message = { role: "user", content };
       const nextMessages = [...messages, userMsg];
+      baseMessagesRef.current = nextMessages; // snapshot the RAF loop builds on
 
-      setMessages([...nextMessages, { role: "assistant", content: "Assessing claim…" }]);
+      setMessages([...nextMessages, { role: "assistant", content: "" }]);
       setToolCalls([]);
       setReport(null);
       setIsStreaming(true);
@@ -46,6 +66,68 @@ export default function ChatContainer() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      /**
+       * Signals that the SSE stream has fully closed.  The RAF tick reads this
+       * (via JS closure-by-reference on a `let`) to know when it is safe to
+       * call setIsStreaming(false) after draining the last pending characters.
+       */
+      let sseComplete = false;
+
+      // ── RAF typing loop ──────────────────────────────────────────────────────
+      // Defined inside sendMessage so it closes over `sseComplete` and the
+      // stable refs.  Self-schedules via requestAnimationFrame until pending
+      // text is empty and SSE is done.
+      function tick() {
+        if (pendingRef.current.length === 0) {
+          // Queue is empty — stop the loop.
+          typingActiveRef.current = false;
+          rafIdRef.current = null;
+          // If SSE finished before the queue drained, end streaming now.
+          if (sseComplete) setIsStreaming(false);
+          return;
+        }
+
+        const chunk = pendingRef.current.slice(0, CHARS_PER_FRAME);
+        pendingRef.current = pendingRef.current.slice(CHARS_PER_FRAME);
+        displayedRef.current += chunk;
+
+        // One setMessages call per frame — keeps re-renders at ~60 fps.
+        setMessages([
+          ...baseMessagesRef.current,
+          { role: "assistant", content: displayedRef.current },
+        ]);
+
+        rafIdRef.current = requestAnimationFrame(tick);
+      }
+
+      /** Append text to the queue and (re)start the RAF loop if needed. */
+      function enqueue(text: string) {
+        pendingRef.current += text;
+        if (!typingActiveRef.current) {
+          typingActiveRef.current = true;
+          rafIdRef.current = requestAnimationFrame(tick);
+        }
+      }
+
+      /**
+       * Cancel in-flight typing and immediately surface a final message.
+       * Used on abort and fatal errors so the UI doesn't appear frozen.
+       */
+      function cancelTyping(finalText: string) {
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        typingActiveRef.current = false;
+        pendingRef.current   = "";
+        displayedRef.current = finalText;
+        setMessages([
+          ...baseMessagesRef.current,
+          { role: "assistant", content: finalText },
+        ]);
+      }
+
+      // ── SSE stream reader ────────────────────────────────────────────────────
       try {
         const res = await fetch("/api/agent", {
           method: "POST",
@@ -54,34 +136,100 @@ export default function ChatContainer() {
           signal: controller.signal,
         });
 
-        const data = (await res.json()) as AgentResponse;
-
-        if (!res.ok || data.error) {
-          throw new Error(data.error ?? `HTTP ${res.status}`);
+        // Validation errors (400) return plain JSON before the SSE stream opens.
+        if (!res.ok) {
+          let errorMsg = `HTTP ${res.status}`;
+          try {
+            const errData = (await res.json()) as { error?: string };
+            errorMsg = errData.error ?? errorMsg;
+          } catch { /* ignore parse failures */ }
+          throw new Error(errorMsg);
         }
 
-        setMessages([
-          ...nextMessages,
-          { role: "assistant", content: data.summary ?? "Assessment complete." },
-        ]);
+        if (!res.body) throw new Error("No response body");
 
-        if (data.toolCalls) setToolCalls(data.toolCalls);
-        if (data.report) setReport(data.report);
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer    = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE events are delimited by double newlines.
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const sseChunk of parts) {
+            const dataLine = sseChunk.split("\n").find((l) => l.startsWith("data: "));
+            if (!dataLine) continue;
+
+            const event = JSON.parse(dataLine.slice(6)) as WorkflowEvent;
+
+            switch (event.type) {
+              case "message":
+                // Non-claim response (greeting / help / unsupported)
+                enqueue(event.summary);
+                break;
+
+              case "workflow-start":
+                enqueue(`Assessment started for claim ${event.claimId}.\n`);
+                break;
+
+              case "step-start":
+                enqueue(`\n## Step ${event.step}: ${event.stepName}\n`);
+                break;
+
+              case "step-result":
+                // Tool calls surface immediately in ToolCallLog; the
+                // human-readable line is typed out progressively.
+                setToolCalls((prev) => [...prev, event.toolCall as ToolCallEntry]);
+                enqueue(`${event.line}\n`);
+                break;
+
+              case "step-complete":
+                // Content already visible from step-start + step-results.
+                break;
+
+              case "workflow-complete":
+                enqueue(
+                  `\n---\n\n## Final Assessment\n\n${event.recommendation}\n${event.reasoning}\n`
+                );
+                break;
+
+              case "final-report":
+                // Populate the right-panel report view immediately.
+                setReport(event.report);
+                break;
+
+              case "error":
+                enqueue(
+                  `\n\nError: ${event.message}\n\nCheck that DEEPSEEK_API_KEY is set in .env.local.`
+                );
+                break;
+            }
+          }
+        }
+
+        // SSE stream closed normally.
+        // Hand the "done" signal to the RAF loop via the captured `let` variable.
+        sseComplete = true;
+        // If the loop already drained the queue and stopped, end streaming now.
+        if (!typingActiveRef.current && pendingRef.current.length === 0) {
+          setIsStreaming(false);
+        }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
-          setMessages([...nextMessages, { role: "assistant", content: "Assessment cancelled." }]);
-          return;
+          cancelTyping("Assessment cancelled.");
+        } else {
+          cancelTyping(
+            "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again."
+          );
         }
-        setMessages([
-          ...nextMessages,
-          {
-            role: "assistant",
-            content:
-              "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.",
-          },
-        ]);
-      } finally {
         setIsStreaming(false);
+      } finally {
         abortRef.current = null;
       }
     },

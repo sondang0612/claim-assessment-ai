@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Application-Driven Workflow + Request Classification
+## Status: Complete — Progressive Typing Renderer (ChatGPT-style UX)
 
 ---
 
@@ -16,7 +16,7 @@
 - **T4** — AI SDK v6 tool schemas (`lib/agent/tools.ts`) *(removed in refactor)*
 - **T5** — System prompt with workflow + report format (`lib/agent/prompts.ts`) *(removed in refactor)*
 - **T6** — Agent runner with streaming + tool logging (`lib/agent/agent.ts`) *(removed in refactor)*
-- **T7** — Streaming API route — custom SSE from `fullStream` *(replaced with JSON route)*
+- **T7** — Streaming API route — custom SSE from `fullStream` *(replaced with JSON route, then re-introduced as SSE in T16)*
 - **T8** — Report parser (`lib/report/generateReport.ts`) *(removed in refactor)*
 - **Migration** — Anthropic → DeepSeek provider (`lib/providers/deepseek.ts`)
 - **T9** — Chat components (`components/chat/`)
@@ -36,6 +36,23 @@
   - classifies: `claim_request | greeting | help_request | unsupported`
   - Non-claim messages return static HELP_MESSAGE — zero LLM cost
   - API route gates LLM/workflow calls behind `claim_request` check
+- **T16** — Streaming workflow via SSE
+  - `types/workflow.ts` — `WorkflowToolCall` + `WorkflowEvent` discriminated union (8 event types)
+  - `lib/workflow/assessmentWorkflow.ts` — added `streamAssessmentWorkflow` async generator
+  - `app/api/agent/route.ts` — converted to SSE (`text/event-stream`); forwards generator events
+  - `components/chat/ChatContainer.tsx` — SSE `ReadableStream` reader; incremental content build
+- **T17** — Progressive typing renderer (ChatGPT-style UX)
+  - `components/chat/ChatContainer.tsx` — typing queue architecture:
+    - `pendingRef` — text buffer fed by SSE events (not yet displayed)
+    - `displayedRef` — text currently shown in the assistant bubble
+    - `baseMessagesRef` — history snapshot the RAF loop builds messages on
+    - `rafIdRef` / `typingActiveRef` — RAF lifecycle guards
+    - `CHARS_PER_FRAME = 5` → ~300 chars/sec at 60 fps
+    - SSE consumer calls `enqueue(text)` — non-blocking, never awaits the RAF
+    - RAF `tick()` drains the queue N chars/frame, calls `setMessages` once/frame
+    - `sseComplete` `let` variable closed over by `tick` — loop calls `setIsStreaming(false)` when both queue is empty AND SSE stream has closed
+    - Abort path: `cancelTyping(finalText)` cancels RAF and flushes final text immediately
+    - Error path: same — RAF cancelled, error message surfaced, `isStreaming` cleared
 
 ---
 
@@ -95,7 +112,7 @@ vitest@4.1.8           Test runner
 
 ---
 
-## Architecture — Application-Driven Workflow
+## Architecture — Streaming Application-Driven Workflow
 
 ```
 POST /api/agent  { messages, model? }
@@ -104,16 +121,22 @@ lib/parser/claimParser.ts
     → generateText(system=PARSER_SYSTEM, prompt=userMessage)
     → JSON.parse(text) + ParsedClaimSchema.parse()
     ↓ ParsedClaim
-    ↓ runAssessmentWorkflow(parsedClaim)
+    ↓ streamAssessmentWorkflow(parsedClaim)       ← async generator
 lib/workflow/assessmentWorkflow.ts
-    → verifyDocument() × N  (pure TypeScript)
-    → lookupPolicy()         (pure TypeScript)
-    → checkMedicalNecessity()(pure TypeScript)
-    → decision rules in TypeScript
-    → calculateBenefit()     (only if APPROVED)
+    → yield workflow-start
+    → verifyDocument() × N  → yield step-result (each doc)
+    → yield step-complete (doc step)
+    → lookupPolicy()        → yield step-result
+    → yield step-complete (policy step)
+    → checkMedicalNecessity() → yield step-result
+    → yield step-complete (necessity step)
+    → decision rules in TypeScript → yield workflow-complete
+    → calculateBenefit() (if APPROVED) → yield step-result
     → builds AssessmentReport in code
-    ↓ { report, toolCalls, summary }
-Response.json(result)
+    → yield final-report
+app/api/agent/route.ts
+    → ReadableStream (text/event-stream)
+    → forward each WorkflowEvent as  data: <json>\n\n
 ```
 
 ### LLM Responsibility
@@ -126,6 +149,44 @@ Response.json(result)
 - Execute all 4 domain tools deterministically in fixed sequence.
 - Apply all business rules (document validity, policy exclusions, medical necessity, benefit calculation) in TypeScript.
 - Build the full `AssessmentReport` in code.
+- Emit `WorkflowEvent` objects incrementally via async generator.
+
+---
+
+## WorkflowEvent Types
+
+| Event | Emitted when | Payload |
+|---|---|---|
+| `workflow-start` | Generator starts | `claimId` |
+| `step-start` | Step begins | `step`, `stepName` |
+| `step-result` | A tool call completes | `toolCall`, `line` (human-readable) |
+| `step-complete` | All tool calls in step done | `step`, `stepName`, `summary` |
+| `workflow-complete` | Decision rules applied | `recommendation`, `reasoning` |
+| `final-report` | Full report built | `report`, `toolCalls`, `summary` |
+| `error` | Exception in workflow | `message` |
+| `message` | Non-claim input | `messageClass`, `summary` |
+
+---
+
+## API Contract
+
+```
+POST /api/agent
+Body: { messages: ChatMessage[], model?: "deepseek-chat" | "deepseek-reasoner" }
+
+Response 200 — SSE stream (text/event-stream):
+  Claim request: stream of WorkflowEvent objects
+    data: {"type":"workflow-start","claimId":"CLM-001"}
+    data: {"type":"step-start","step":1,"stepName":"Document Verification"}
+    data: {"type":"step-result","toolCall":{...},"line":"✓ DOC-001 verified"}
+    ...
+    data: {"type":"final-report","report":{...},"toolCalls":[...],"summary":"..."}
+
+  Non-claim: single message event
+    data: {"type":"message","messageClass":"greeting","summary":"..."}
+
+Response 400: JSON { error: string }  (validation errors before stream starts)
+```
 
 ---
 
@@ -137,8 +198,9 @@ Response.json(result)
 | LLM call | `generateText()` | DeepSeek rejects `json_schema` response_format used by `generateObject()` |
 | JSON extraction | `JSON.parse + Zod.parse` | Safe validation after `generateText()` plain text response |
 | Workflow | Deterministic TypeScript | No hallucination risk; fully testable without API |
+| Streaming | AsyncGenerator + SSE | Events emitted per step; deterministic execution preserved |
 | Report building | In-code TypeScript | Deterministic output; policy citations from structured data |
-| API response | JSON (not SSE) | No streaming needed when workflow is synchronous |
+| Backward compat | `runAssessmentWorkflow` kept sync | All 122 existing tests pass unchanged |
 | Tool calls | Plain TypeScript functions | No AI SDK wrappers needed in application-driven flow |
 | Message classification | Regex (no LLM) | Zero latency; prevents parser errors for casual messages |
 

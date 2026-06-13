@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-06-13 — Streaming Workflow via SSE
+
+### Feature — Real-time workflow progress streaming
+
+**Architecture change:**
+Previously the API route awaited the full `runAssessmentWorkflow` result then returned it as a single JSON blob.  Users saw no output until the entire assessment finished.  The API route now streams Server-Sent Events (SSE) as each workflow step completes, and the frontend renders them incrementally in the assistant message bubble.
+
+**Added**
+- `types/workflow.ts` — `WorkflowToolCall` (moved from `assessmentWorkflow.ts`) and `WorkflowEvent` discriminated union
+  - Event types: `workflow-start`, `step-start`, `step-result`, `step-complete`, `workflow-complete`, `final-report`, `error`, `message`
+- `lib/workflow/assessmentWorkflow.ts` — `streamAssessmentWorkflow(claim)` async generator; yields `WorkflowEvent` objects as each step executes; same deterministic business logic as `runAssessmentWorkflow`
+
+**Changed**
+- `app/api/agent/route.ts` — converted from `Response.json()` to SSE `ReadableStream` (`Content-Type: text/event-stream`); claim requests consume `streamAssessmentWorkflow` and forward events; non-claim messages emit a single `message` event; validation errors (400) still return JSON
+- `components/chat/ChatContainer.tsx` — replaced `await res.json()` with SSE `ReadableStream` reader; parses `data:` lines and handles each `WorkflowEvent`; builds assistant message content incrementally via `appendContent`/`updateContent`; tool calls appear in `ToolCallLog` as each `step-result` event arrives; `final-report` event populates the right-panel report view
+
+**Preserved**
+- `runAssessmentWorkflow` synchronous function — unchanged; all 122 existing tests continue to pass
+- Deterministic architecture — LLM limited to claim parsing; all business logic in TypeScript
+
+**User experience**
+```
+Assessment started for claim CLM-001.
+
+## Step 1: Document Verification
+✓ DOC-001 verified
+✓ DOC-002 verified
+
+## Step 2: Policy Verification
+✓ Policy active
+✓ surgery coverage found
+
+## Step 3: Medical Necessity
+✓ Procedure medically necessary
+
+## Step 4: Benefit Calculation
+✓ Covered amount: $4,500
+
+---
+
+## Final Assessment
+
+APPROVED
+All criteria satisfied. Benefit: $4,500 covered at 90% (deductible $0 applied).
+```
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing (9 test files)
+- `npx eslint` — 0 errors (2 pre-existing warnings in ChatInput.tsx)
+- `npm run build` — compiled successfully
+
+---
+
 ## 2026-06-13 — Request Classification Layer
 
 ### Added — Non-claim message handling
@@ -20,7 +74,7 @@
 **Verified**
 - `npx tsc --noEmit` — 0 errors
 - `npx vitest run` — 122/122 tests passing (9 test files)
-- `npx eslint` — 0 errors
+- `npx eslint` — 0 errors (2 pre-existing warnings in ChatInput.tsx unrelated to refactor)
 
 ---
 
