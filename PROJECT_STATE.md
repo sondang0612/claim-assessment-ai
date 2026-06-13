@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Refactor Complete — Application-Driven Workflow
+## Status: Complete — Application-Driven Workflow + Request Classification
 
 ---
 
@@ -22,7 +22,7 @@
 - **T9** — Chat components (`components/chat/`)
 - **T10** — Report components (`components/report/`)
 - **T11** — Page integration (`app/page.tsx`)
-- **T12** — All test scenarios (85 tests, 8 files, all passing)
+- **T12** — All test scenarios (122 tests, 9 files, all passing)
 - **T13** — TypeScript + ESLint + Build all clean (0 errors)
 - **T14** — Refactor: LLM-driven → application-driven workflow
   - `lib/parser/claimParser.ts` — LLM extracts structured claim fields only
@@ -31,6 +31,11 @@
   - Deleted `lib/report/generateReport.ts`
   - Updated API route to return JSON (not SSE stream)
   - Updated ChatContainer to use JSON fetch (not SSE reader)
+- **T15** — Request classification layer
+  - `lib/classifier/requestClassifier.ts` — pure regex classifier (no LLM)
+  - classifies: `claim_request | greeting | help_request | unsupported`
+  - Non-claim messages return static HELP_MESSAGE — zero LLM cost
+  - API route gates LLM/workflow calls behind `claim_request` check
 
 ---
 
@@ -135,14 +140,15 @@ Response.json(result)
 | Report building | In-code TypeScript | Deterministic output; policy citations from structured data |
 | API response | JSON (not SSE) | No streaming needed when workflow is synchronous |
 | Tool calls | Plain TypeScript functions | No AI SDK wrappers needed in application-driven flow |
+| Message classification | Regex (no LLM) | Zero latency; prevents parser errors for casual messages |
 
 ---
 
 ## Test Results
 
 ```
-Test Files: 8 passed
-Tests:      85 passed
+Test Files: 9 passed
+Tests:      122 passed
 ```
 
 | File | Tests | Coverage |
@@ -155,3 +161,4 @@ Tests:      85 passed
 | `claim-flow.test.ts` | 14 | End-to-end tool chain for all 3 scenarios + recommendation derivation |
 | `tool-execution.test.ts` | 21 | Edge cases: unknown IDs, deductible math, maxBenefit cap, unapproved procedures |
 | `report-citations.test.ts` | 9 | Workflow citation output + citation source data validation |
+| `request-classifier.test.ts` | 37 | All 4 categories + priority rules (claim wins over greeting) + edge cases |

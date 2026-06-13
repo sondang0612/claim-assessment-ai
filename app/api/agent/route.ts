@@ -1,4 +1,5 @@
 import { type NextRequest } from 'next/server';
+import { classifyRequest, HELP_MESSAGE } from '@/lib/classifier/requestClassifier';
 import { parseClaim } from '@/lib/parser/claimParser';
 import { runAssessmentWorkflow } from '@/lib/workflow/assessmentWorkflow';
 import { DEFAULT_MODEL, type DeepSeekModel } from '@/lib/providers/deepseek';
@@ -33,10 +34,19 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  // Extract the most recent user message for claim parsing
+  // Extract the most recent user message
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   if (!lastUserMessage) {
     return Response.json({ error: 'No user message found in history' }, { status: 400 });
+  }
+
+  // Classify the message before attempting any LLM call or claim parsing
+  const { messageClass } = classifyRequest(lastUserMessage.content);
+  console.log(`[api/agent] classified message as: ${messageClass}`);
+
+  // Non-claim messages receive a static help response — no LLM call needed
+  if (messageClass !== 'claim_request') {
+    return Response.json({ messageClass, summary: HELP_MESSAGE });
   }
 
   try {
@@ -49,6 +59,7 @@ export async function POST(request: NextRequest) {
     console.log(`[api/agent] assessment complete recommendation=${result.report.recommendation}`);
 
     return Response.json({
+      messageClass,
       report: result.report,
       toolCalls: result.toolCalls,
       summary: result.summary,

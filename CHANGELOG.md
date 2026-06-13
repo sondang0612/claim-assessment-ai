@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-13 — Request Classification Layer
+
+### Added — Non-claim message handling
+
+**Added**
+- `lib/classifier/requestClassifier.ts` — `classifyRequest(message)` returns `MessageClass` (`claim_request | greeting | help_request | unsupported`) using pure regex matching — no LLM call, zero latency
+- `HELP_MESSAGE` constant — static onboarding response for all non-claim messages
+- `__tests__/request-classifier.test.ts` — 37 tests covering all 4 categories, priority rules, and edge cases
+
+**Changed**
+- `app/api/agent/route.ts` — classifies message before any LLM call; returns `{ messageClass, summary: HELP_MESSAGE }` for non-claim messages; includes `messageClass` in claim response
+- `components/chat/ChatContainer.tsx` — added `messageClass` field to `AgentResponse` type
+
+**Behavior**
+- Greetings ("hi", "hello", "xin chào", "how are you?"), help requests ("help", "how does this work?"), and unrecognized messages now receive a structured onboarding response without making any API call
+- Messages containing CLM-/POL-/DOC- identifiers or medical terms + financial amounts/codes proceed to claim parsing as before
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing (9 test files)
+- `npx eslint` — 0 errors
+
+---
+
 ## 2026-06-13 — Application-Driven Workflow Refactor
 
 ### Refactor — LLM-driven → deterministic application workflow

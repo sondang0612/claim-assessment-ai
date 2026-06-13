@@ -30,6 +30,15 @@
 │  └──────────────────────────────────────────────────────┘  │
 │                           │                                  │
 │  ┌──────────────────────────────────────────────────────┐  │
+│  │  Classifier Layer  (deterministic — no LLM)          │  │
+│  │  lib/classifier/requestClassifier.ts                 │  │
+│  │  ├─ classifyRequest(message) → MessageClass          │  │
+│  │  ├─ claim_request / greeting / help_request /        │  │
+│  │  │   unsupported                                     │  │
+│  │  └─ Pure regex matching — zero latency, no API call  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                           │ claim_request only               │
+│  ┌──────────────────────────────────────────────────────┐  │
 │  │  Parser Layer  (LLM — structured extraction only)     │  │
 │  │  lib/parser/claimParser.ts                           │  │
 │  │  ├─ parseClaim(userMessage, model) → ParsedClaim     │  │
@@ -98,12 +107,21 @@
 ## Request Flow (Application-Driven)
 
 ```
-User submits claim details
+User submits any message
         │
         ▼
 POST /api/agent  { messages, model? }
         │
-        ▼  parseClaim(lastUserMessage, model)
+        ▼  classifyRequest(lastUserMessage)      ← pure regex, no LLM
+lib/classifier/requestClassifier.ts
+        │
+        ├─ greeting / help_request / unsupported
+        │       ↓ return immediately (no LLM call)
+        │   { messageClass, summary: HELP_MESSAGE }
+        │
+        └─ claim_request
+                ▼
+        parseClaim(lastUserMessage, model)
 lib/parser/claimParser.ts
         │  generateText(system=PARSER_SYSTEM, prompt=userMessage)
         │  → DeepSeek returns raw JSON string
@@ -125,14 +143,14 @@ lib/workflow/assessmentWorkflow.ts
         └─ Builds AssessmentReport in code
         │
         ▼
-{ report: AssessmentReport, toolCalls: WorkflowToolCall[], summary: string }
+{ messageClass, report, toolCalls, summary }
         │
         ▼  Response.json(result)
         │
         ▼  ChatContainer (client)
         - summary → assistant MessageBubble
-        - toolCalls → ToolCallLog (all status: 'done')
-        - report → AssessmentReportView
+        - toolCalls → ToolCallLog (all status: 'done', empty for non-claims)
+        - report → AssessmentReportView (absent for non-claims)
 ```
 
 ---
@@ -141,6 +159,7 @@ lib/workflow/assessmentWorkflow.ts
 
 | Responsibility | LLM | Application |
 |---|---|---|
+| Classify message type (claim vs. greeting/help) | | ✅ regex |
 | Parse claim fields from user message | ✅ | |
 | Return structured JSON output | ✅ | |
 | Verify documents | | ✅ |
@@ -150,6 +169,7 @@ lib/workflow/assessmentWorkflow.ts
 | Apply approval/rejection rules | | ✅ |
 | Build assessment report | | ✅ |
 | Orchestrate workflow | | ✅ |
+| Handle non-claim messages (greetings/help) | | ✅ static |
 
 ---
 
@@ -178,6 +198,8 @@ claim-assessment-ai/
 ├── lib/
 │   ├── providers/
 │   │   └── deepseek.ts             # DeepSeek provider via @ai-sdk/openai
+│   ├── classifier/
+│   │   └── requestClassifier.ts    # classifyRequest() — pure regex, no LLM
 │   ├── parser/
 │   │   └── claimParser.ts          # parseClaim() — generateText + Zod
 │   ├── workflow/
@@ -207,7 +229,8 @@ claim-assessment-ai/
     ├── provider-deepseek.test.ts   # Provider config + model selection
     ├── claim-flow.test.ts          # Tool chain per scenario + recommendation
     ├── tool-execution.test.ts      # Tool edge cases + boundary math
-    └── report-citations.test.ts    # Workflow citations + policy source data
+    ├── report-citations.test.ts    # Workflow citations + policy source data
+    └── request-classifier.test.ts  # Classifier — all 4 categories + edge cases
 ```
 
 ---
@@ -251,10 +274,18 @@ Note: DeepSeek does not support `response_format: json_schema`. The parser uses
 POST /api/agent
 Body: { messages: ChatMessage[], model?: "deepseek-chat" | "deepseek-reasoner" }
 
-Response 200: {
-  report:    AssessmentReport,
-  toolCalls: WorkflowToolCall[],   // all status: "done"
-  summary:   string
+Response 200 — claim_request:
+{
+  messageClass: "claim_request",
+  report:       AssessmentReport,
+  toolCalls:    WorkflowToolCall[],   // all status: "done"
+  summary:      string
+}
+
+Response 200 — non-claim (greeting | help_request | unsupported):
+{
+  messageClass: "greeting" | "help_request" | "unsupported",
+  summary:      string   // static HELP_MESSAGE — no LLM call made
 }
 
 Response 400: { error: string }

@@ -16,6 +16,7 @@ interface Message {
 }
 
 interface AgentResponse {
+  messageClass?: 'claim_request' | 'greeting' | 'help_request' | 'unsupported';
   report?: AssessmentReport;
   toolCalls?: ToolCallEntry[];
   summary?: string;
