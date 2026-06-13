@@ -9,6 +9,9 @@
 |  +------------------------------------------------------+  |
 |  |  Presentation Layer                                   |  |
 |  |  app/page.tsx                                        |  |
+|  |  +- components/sidebar/Sidebar.tsx (dark nav)      |  |
+|  |  |   (New Assessment, Search, grouped history,      |  |
+|  |  |    inline rename/delete, empty state)            |  |
 |  |  +- components/chat/ChatContainer.tsx                |  |
 |  |  |   +- MessageList.tsx       (message thread)       |  |
 |  |  |   +- MessageBubble.tsx     (individual message)   |  |
@@ -404,8 +407,10 @@ claim-assessment-ai/
 |   +-- globals.css
 |
 +-- components/
+|   +-- sidebar/
+|   |   +-- Sidebar.tsx             # Dark conversation history panel (T20)
 |   +-- chat/
-|   |   +-- ChatContainer.tsx       # SSE reader; synchronized effects queue (T17+T19)
+|   |   +-- ChatContainer.tsx       # Conversation mgmt + SSE reader + synchronized effects (T17+T19+T20)
 |   |   +-- MessageList.tsx         # Scrollable message thread
 |   |   +-- MessageBubble.tsx       # Single message (user | assistant)
 |   |   +-- ChatInput.tsx           # Textarea + submit button

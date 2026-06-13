@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Synchronized Progressive Rendering (ChatGPT Agent-style UX)
+## Status: Complete — ChatGPT-style Conversation Sidebar + Synchronized Progressive Rendering
 
 ---
 
@@ -66,6 +66,35 @@
   - `components/chat/ToolCallLog.tsx` — extended status union; `running` → yellow pulse, `completed` → green dot
   - `components/report/AssessmentReport.tsx` — accepts `PartialAssessmentReport`; each section wrapped in conditional; missing sections show animated "Pending…" placeholder
   - `components/chat/WorkflowTimeline.tsx` — new component; horizontal step tracker with pending/running/completed/failed states
+- **T20** — ChatGPT-style conversation sidebar
+  - `types/conversation.ts` — new `Conversation` type (id, title, messages, toolCalls, workflowSteps, report, createdAt, updatedAt)
+  - `components/sidebar/Sidebar.tsx` — new dark sidebar component:
+    - Brand header + "New Assessment" button (disabled while streaming)
+    - Live search input with clear button; filters conversation titles in place
+    - Conversations grouped by Today / Yesterday / Previous 7 Days / Older; each group hidden when empty
+    - `ConversationItem` component — truncated title, relative timestamp, hover actions (Rename inline edit, Delete)
+    - Empty state (no conversations) and no-results state (search returns nothing)
+    - Fully keyboard-accessible (tabIndex, Enter to select)
+  - `components/chat/ChatContainer.tsx` — major extension:
+    - `conversations: Conversation[]` state — persisted to `localStorage` (`claim-assessment-conversations-v1`)
+    - `activeConvId: string | null` state — tracks which conversation is loaded
+    - `sidebarOpen: boolean` state — toggles sidebar on desktop; drives mobile drawer
+    - `snapshotRef` — captures `{ messages, toolCalls, workflowSteps, report }` after each render via a no-dep `useEffect` (avoids volatile state in streaming-complete effect deps)
+    - `prevIsStreamingRef` — detects the `true → false` transition to trigger history save
+    - `clearAnimation()` — shared helper that cancels the RAF loop and resets all animation refs
+    - `selectConversation(id)` — loads a past conversation into active state (blocked while streaming)
+    - `newAssessment()` — resets all active state and clears `activeConvId`
+    - `deleteConversation(id)` — removes from history; calls `newAssessment()` if was active
+    - `renameConversation(id, title)` — in-place title update via functional updater
+    - `sendMessage` — auto-creates a `Conversation` on first message if none active; updates title to `"Claim CLM-XXX"` on `workflow-start` event
+    - Desktop layout: sidebar collapses to `w-0` via `transition-[width]` (content preserved inside inner `w-64` div)
+    - Mobile: sidebar is a `fixed` z-50 drawer with `translateX` transition + dark backdrop overlay
+    - Header shows sidebar toggle (hamburger), active conversation title, streaming indicator
+    - Assessment report panel always visible; persists across conversation switches
+    - Layout: `[Dark Sidebar 256px] [Chat flex-1] [Report 320px]`
+  - **Persistence**: conversations saved to `localStorage` on every state change; loaded on mount via lazy `useState` initializer (SSR-safe with `typeof window` guard)
+  - **Auto-title**: first 60 chars of user message; upgraded to `"Claim CLM-XXX"` when `workflow-start` fires
+  - **Switching**: restores full message/toolCalls/workflowSteps/report state; does not replay animation for past conversations
 - **T19** — Synchronized side-effect queue (UX race condition fix)
   - Root cause: SSE events arrived at network speed while narration typed at ~300 chars/sec; tool panels and full report appeared before the corresponding text was visible
   - Fix: `scheduledEffectsRef` (list of `{ fireAtPos, effect }`) + `totalEnqueuedRef` (cumulative chars ever enqueued)
