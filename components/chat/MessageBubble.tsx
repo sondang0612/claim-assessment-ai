@@ -1,14 +1,20 @@
+import { SyncLoader } from "react-spinners";
+
 interface MessageBubbleProps {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
 }
 
-export default function MessageBubble({ role, content, isStreaming }: MessageBubbleProps) {
-  const isUser = role === 'user';
+export default function MessageBubble({
+  role,
+  content,
+  isStreaming,
+}: MessageBubbleProps) {
+  const isUser = role === "user";
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
         <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 mt-1">
           <span className="text-white text-xs font-bold">AI</span>
@@ -17,14 +23,16 @@ export default function MessageBubble({ role, content, isStreaming }: MessageBub
       <div
         className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap break-words ${
           isUser
-            ? 'bg-blue-600 text-white rounded-tr-sm'
-            : 'bg-white text-gray-800 border border-gray-200 rounded-tl-sm'
+            ? "bg-blue-600 text-white rounded-tr-sm"
+            : "bg-white text-gray-800 border border-gray-200 rounded-tl-sm"
         }`}
       >
-        {content || (isStreaming && !isUser ? '' : ' ')}
-        {isStreaming && !isUser && (
-          <span className="inline-block w-1.5 h-4 ml-0.5 bg-gray-400 animate-pulse rounded-sm align-middle" />
-        )}
+        {content ||
+          (isStreaming && !isUser ? (
+            <SyncLoader size={8} speedMultiplier={0.5} />
+          ) : (
+            <SyncLoader size={8} speedMultiplier={0.5} />
+          ))}
       </div>
       {isUser && (
         <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0 mt-1">
