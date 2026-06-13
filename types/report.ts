@@ -60,3 +60,22 @@ export interface AssessmentReport {
     policyCitations: PolicyCitation[];
   };
 }
+
+/** Sections present so far during progressive streaming; each field is absent until its step completes. */
+export type PartialAssessmentSections = Partial<{
+  documentReview: DocumentReviewSection;
+  policyVerification: PolicyVerificationSection;
+  medicalNecessity: MedicalNecessitySection;
+  benefitCalculation: BenefitCalculationSection;
+  recommendation: RecommendationSection;
+  policyCitations: PolicyCitation[];
+}>;
+
+/** Grows incrementally via report-update events; structurally assignable from AssessmentReport. */
+export interface PartialAssessmentReport {
+  claimId: string;
+  patientName?: string;
+  assessmentDate?: string;
+  recommendation?: Recommendation;
+  sections: PartialAssessmentSections;
+}

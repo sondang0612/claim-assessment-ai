@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-06-13 — Synchronized Progressive Rendering (T18 + T19)
+
+### Feature — Live tool lifecycle events, progressive report, synchronized UI
+
+**Problem solved:**
+Backend tools execute in microseconds; all SSE events arrived at near-network speed.  `setToolCalls` and `setReport` fired immediately on event receipt while the RAF typing animation revealed text at ~300 chars/sec.  Users saw completed tool panels and the full assessment report appearing while still reading Step 1's header — a "precomputed dump" rather than an agent reasoning in real time.
+
+**Root cause:** Side effects (React state updates) were decoupled from the typing animation timeline.
+
+**Solution — Synchronized side-effect queue (T19):**
+A `scheduledEffectsRef` queue of `{ fireAtPos: number, effect: () => void }` pairs, plus a `totalEnqueuedRef` counter (total chars ever pushed to `pendingRef`).  The RAF `tick()` fires effects whose `fireAtPos <= displayedRef.length` on each frame.  This binds all UI panel updates to exact character positions in the typing stream.
+
+**Added**
+- `types/report.ts` — `PartialAssessmentSections` (all sections optional) and `PartialAssessmentReport` interface; `AssessmentReport` remains structurally assignable
+- `types/workflow.ts` — three new event types and extended tool status:
+  - `tool-start` — emitted before each tool call with `toolCallId`, `toolName`, `input`, `step`
+  - `tool-complete` — emitted after each tool call with result `toolCall` (`status:'completed'`), `line`, `step`
+  - `report-update` — partial report snapshot after each `step-complete` and after `workflow-complete`
+  - `WorkflowToolCall.status` extended to `'done' | 'running' | 'completed' | 'failed'`
+- `components/chat/WorkflowTimeline.tsx` — new horizontal step progress component; dots cycle pending → running (blue pulse) → completed (green) → failed (red)
+
+**Changed**
+- `lib/workflow/assessmentWorkflow.ts` — `streamAssessmentWorkflow` now emits T18 events:
+  - `tool-start` before each `record()` call
+  - `tool-complete` after each `record()` call (in addition to legacy `step-result`)
+  - `docFindings` computed immediately after Step 1 (moved from end of generator)
+  - `policyCitations` computed immediately after Step 2 (moved from end of generator)
+  - `report-update` after each `step-complete` with sections built so far
+  - `report-update` after `workflow-complete` with recommendation + reasoning section
+  - Non-approved claims: immediate N/A `benefitCalculation` section (prevents "Pending…" flash)
+- `components/chat/ToolCallLog.tsx` — `ToolCallEntry.status` extended; `running` → yellow pulse, `completed`/`done` → green dot
+- `components/report/AssessmentReport.tsx` — accepts `PartialAssessmentReport`; missing sections render animated "Pending…" placeholder; recommendation shows "Assessing…" pulsing until set
+- `components/chat/ChatContainer.tsx` — complete rewrite of SSE event handling:
+  - Added `scheduledEffectsRef`, `totalEnqueuedRef` refs
+  - `enqueue(text)` increments `totalEnqueuedRef` alongside `pendingRef`
+  - `scheduleEffect(fn)` registers at current `totalEnqueuedRef` position
+  - RAF `tick()` fires due effects after each frame's character reveal
+  - `step-start` → `scheduleEffect(markRunning)` before `enqueue(header)` — step turns RUNNING as previous text finishes
+  - `tool-start` → `scheduleEffect(addRunning)` — tool appears RUNNING when step header fully typed
+  - `tool-complete` → `enqueue(line)` then `scheduleEffect(setDone)` — tool turns DONE after its line is typed
+  - `step-complete` → `scheduleEffect(markCompleted)` — step DONE at same position as last tool result
+  - `report-update` → `scheduleEffect(mergeSection)` — section appears in right panel at same moment
+  - `final-report` → `scheduleEffect(setFullReport)` — complete report replaces partials after all text typed
+  - Safety flush: remaining effects fired when SSE closes with an already-empty queue
+  - Added `workflowSteps` state; `WorkflowTimeline` rendered between `MessageList` and `ToolCallLog`
+  - `step-result` events are now no-ops (handled by `tool-start`/`tool-complete`)
+
+**Preserved**
+- `runAssessmentWorkflow` synchronous function — unchanged; all 122 existing tests pass
+- Deterministic architecture — no new LLM calls; all business logic in TypeScript
+- `step-result` events still emitted from backend for backward compatibility
+
+**User experience (APPROVED claim):**
+- Step 1 header starts typing → "Document Verification" turns RUNNING in timeline simultaneously
+- "verifyDocument" tool appears in log as RUNNING while the step header finishes
+- Each result line types → tool turns DONE, next tool turns RUNNING
+- When last result types → step turns DONE + Document Review section appears in right panel
+- Step 2 begins → same synchronized pattern
+- When `workflow-complete` text finishes typing → Recommendation section appears
+- Right panel fills section-by-section, perfectly in sync with the narration
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing (9 test files)
+- `npx eslint` — 0 errors (2 pre-existing warnings in ChatInput.tsx)
+- `npm run build` — compiled successfully
+
+---
+
 ## 2026-06-13 — Streaming Workflow via SSE
 
 ### Feature — Real-time workflow progress streaming

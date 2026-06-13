@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Progressive Typing Renderer (ChatGPT-style UX)
+## Status: Complete — Synchronized Progressive Rendering (ChatGPT Agent-style UX)
 
 ---
 
@@ -53,6 +53,32 @@
     - `sseComplete` `let` variable closed over by `tick` — loop calls `setIsStreaming(false)` when both queue is empty AND SSE stream has closed
     - Abort path: `cancelTyping(finalText)` cancels RAF and flushes final text immediately
     - Error path: same — RAF cancelled, error message surfaced, `isStreaming` cleared
+- **T18** — Live tool lifecycle events + progressive report rendering
+  - `types/workflow.ts` — added `tool-start`, `tool-complete`, `report-update` event types; `WorkflowToolCall.status` extended to `'done' | 'running' | 'completed' | 'failed'`
+  - `types/report.ts` — added `PartialAssessmentSections` (all sections optional) and `PartialAssessmentReport` interface
+  - `lib/workflow/assessmentWorkflow.ts` — `streamAssessmentWorkflow` now emits:
+    - `tool-start` before each tool call (carries toolCallId, toolName, input)
+    - `tool-complete` after each tool call (carries result + human-readable line)
+    - `report-update` after each step-complete with the partial sections available so far
+    - `report-update` after `workflow-complete` with recommendation + reasoning section
+    - `docFindings` computed right after Step 1; `policyCitations` right after Step 2
+    - Non-approved claims receive an immediate N/A `benefitCalculation` section (no "Pending…" flash)
+  - `components/chat/ToolCallLog.tsx` — extended status union; `running` → yellow pulse, `completed` → green dot
+  - `components/report/AssessmentReport.tsx` — accepts `PartialAssessmentReport`; each section wrapped in conditional; missing sections show animated "Pending…" placeholder
+  - `components/chat/WorkflowTimeline.tsx` — new component; horizontal step tracker with pending/running/completed/failed states
+- **T19** — Synchronized side-effect queue (UX race condition fix)
+  - Root cause: SSE events arrived at network speed while narration typed at ~300 chars/sec; tool panels and full report appeared before the corresponding text was visible
+  - Fix: `scheduledEffectsRef` (list of `{ fireAtPos, effect }`) + `totalEnqueuedRef` (cumulative chars ever enqueued)
+  - `scheduleEffect(fn)` registers a callback at the CURRENT `totalEnqueuedRef` position
+  - RAF `tick()` after each char reveal checks `displayedRef.length >= fireAtPos`; fires all due effects in insertion order
+  - Ordering discipline:
+    - `step-start` → `scheduleEffect(markRunning)` THEN `enqueue(header)` → step fires RUNNING when prior text finishes
+    - `tool-start` → `scheduleEffect(addRunning)` → tool appears RUNNING when step header finishes typing
+    - `tool-complete` → `enqueue(line)` THEN `scheduleEffect(setDone)` → tool turns DONE after its result line is fully typed
+    - `step-complete` → `scheduleEffect(markCompleted)` → step turns DONE at same position as last tool's completion
+    - `report-update` → `scheduleEffect(mergeSection)` → section appears in right panel at same moment
+    - `final-report` → `scheduleEffect(setFullReport)` → complete report replaces partials after all text typed
+  - Safety flush: when SSE closes with queue already empty, any remaining effects fire immediately before `setIsStreaming(false)`
 
 ---
 
@@ -155,16 +181,19 @@ app/api/agent/route.ts
 
 ## WorkflowEvent Types
 
-| Event | Emitted when | Payload |
-|---|---|---|
-| `workflow-start` | Generator starts | `claimId` |
-| `step-start` | Step begins | `step`, `stepName` |
-| `step-result` | A tool call completes | `toolCall`, `line` (human-readable) |
-| `step-complete` | All tool calls in step done | `step`, `stepName`, `summary` |
-| `workflow-complete` | Decision rules applied | `recommendation`, `reasoning` |
-| `final-report` | Full report built | `report`, `toolCalls`, `summary` |
-| `error` | Exception in workflow | `message` |
-| `message` | Non-claim input | `messageClass`, `summary` |
+| Event | Emitted when | Payload | Frontend action |
+|---|---|---|---|
+| `workflow-start` | Generator starts | `claimId` | `enqueue("Assessment started…")` |
+| `step-start` | Step begins | `step`, `stepName` | `scheduleEffect(markRunning)` → `enqueue(header)` |
+| `tool-start` | Before each tool call | `toolCallId`, `toolName`, `input`, `step` | `scheduleEffect(addRunningTool)` |
+| `tool-complete` | After each tool call | `toolCall` (status=completed), `line`, `step` | `enqueue(line)` → `scheduleEffect(setDone)` |
+| `step-result` | After each tool (legacy) | `toolCall`, `line` | ignored (handled by tool-start/tool-complete) |
+| `step-complete` | All tools in step done | `step`, `stepName`, `summary` | `scheduleEffect(markCompleted)` |
+| `report-update` | After step-complete | `partial: PartialAssessmentReport`, `step`, `stepName` | `scheduleEffect(mergeReport)` |
+| `workflow-complete` | Decision rules applied | `recommendation`, `reasoning` | `enqueue(finalText)` |
+| `final-report` | Full report built | `report`, `toolCalls`, `summary` | `scheduleEffect(setFullReport)` |
+| `error` | Exception in workflow | `message` | `enqueue(errorText)` |
+| `message` | Non-claim input | `messageClass`, `summary` | `enqueue(summary)` |
 
 ---
 
