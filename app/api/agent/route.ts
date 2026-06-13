@@ -1,14 +1,12 @@
 import { type NextRequest } from 'next/server';
-import { runAgent } from '@/lib/agent/agent';
+import { parseClaim } from '@/lib/parser/claimParser';
+import { runAssessmentWorkflow } from '@/lib/workflow/assessmentWorkflow';
 import { DEFAULT_MODEL, type DeepSeekModel } from '@/lib/providers/deepseek';
 import type { ChatMessage } from '@/types/agent';
 
 export const runtime = 'nodejs';
 
 const VALID_MODELS: DeepSeekModel[] = ['deepseek-chat', 'deepseek-reasoner'];
-
-type ToolCallChunk = { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown };
-type ToolResultChunk = { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
 
 export async function POST(request: NextRequest) {
   let messages: ChatMessage[];
@@ -35,44 +33,29 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const agentResult = runAgent(messages, model);
-  const encoder = new TextEncoder();
+  // Extract the most recent user message for claim parsing
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  if (!lastUserMessage) {
+    return Response.json({ error: 'No user message found in history' }, { status: 400 });
+  }
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of agentResult.fullStream) {
-          let event: Record<string, unknown> | null = null;
+  try {
+    // LLM parses structured claim fields from the user message — no tool calls, no decisions
+    const parsedClaim = await parseClaim(lastUserMessage.content, model);
+    console.log(`[api/agent] parsed claim=${parsedClaim.claimId} policy=${parsedClaim.policyId}`);
 
-          if (chunk.type === 'text-delta') {
-            event = { type: 'text', text: chunk.text };
-          } else if (chunk.type === 'tool-call') {
-            const tc = chunk as unknown as ToolCallChunk;
-            event = { type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input };
-          } else if (chunk.type === 'tool-result') {
-            const tr = chunk as unknown as ToolResultChunk;
-            event = { type: 'tool-result', toolCallId: tr.toolCallId, toolName: tr.toolName, output: tr.output };
-          }
+    // Deterministic workflow executes all assessment steps in TypeScript
+    const result = runAssessmentWorkflow(parsedClaim);
+    console.log(`[api/agent] assessment complete recommendation=${result.report.recommendation}`);
 
-          if (event !== null) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-          }
-        }
-        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Stream error';
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`));
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  });
+    return Response.json({
+      report: result.report,
+      toolCalls: result.toolCalls,
+      summary: result.summary,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Assessment failed';
+    console.error('[api/agent] error:', error);
+    return Response.json({ error: message }, { status: 500 });
+  }
 }

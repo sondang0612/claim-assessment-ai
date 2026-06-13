@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-06-13 — Application-Driven Workflow Refactor
+
+### Refactor — LLM-driven → deterministic application workflow
+
+**Architecture change:**
+Previously the LLM received a system prompt instructing it to call tools in sequence, make business decisions, and emit a `<report>` JSON block in its response text. The API streamed SSE events to the client. Now the LLM only extracts structured claim fields; all business logic runs in deterministic TypeScript.
+
+**Added**
+- `lib/parser/claimParser.ts` — `parseClaim(userMessage, model)` using `generateText` + `JSON.parse` + `ParsedClaimSchema.parse` (avoids DeepSeek's unsupported `json_schema` response_format)
+- `lib/workflow/assessmentWorkflow.ts` — `runAssessmentWorkflow(claim)` — deterministic 4-step workflow, TypeScript decision rules, in-code report builder
+
+**Removed**
+- `lib/agent/agent.ts` — `streamText`-based ReAct tool loop
+- `lib/agent/prompts.ts` — system prompt with embedded workflow instructions
+- `lib/agent/tools.ts` — AI SDK v6 tool wrappers
+- `lib/report/generateReport.ts` — `parseReportFromText()` (report now built in code)
+
+**Changed**
+- `app/api/agent/route.ts` — replaced SSE stream with `Response.json({ report, toolCalls, summary })`
+- `components/chat/ChatContainer.tsx` — replaced SSE reader with standard JSON fetch + `AbortController`
+- `__tests__/report.test.ts` — rewritten to test `runAssessmentWorkflow` for all 3 scenarios (11 tests)
+- `__tests__/report-citations.test.ts` — rewritten to use workflow citation output (9 tests)
+- `__tests__/claim-flow.test.ts` — updated reference comment from deleted `prompts.ts`
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 85/85 tests passing
+- `npx eslint` — 0 errors (2 pre-existing warnings in ChatInput.tsx unrelated to refactor)
+
+---
+
 ## 2026-06-13
 
 ### Added — UI (Phase 5)

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { parseReportFromText } from "@/lib/report/generateReport";
 import type { AssessmentReport } from "@/types/report";
+import type { ToolCallEntry } from "./ToolCallLog";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
-import ToolCallLog, { type ToolCallEntry } from "./ToolCallLog";
+import ToolCallLog from "./ToolCallLog";
 import AssessmentReportView from "../report/AssessmentReport";
 
 type DeepSeekModel = "deepseek-chat" | "deepseek-reasoner";
@@ -15,21 +15,12 @@ interface Message {
   content: string;
 }
 
-type SSEEvent =
-  | { type: "text"; text: string }
-  | {
-      type: "tool-call";
-      toolCallId: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }
-  | {
-      type: "tool-result";
-      toolCallId: string;
-      toolName: string;
-      output: unknown;
-    }
-  | { type: "error"; message: string };
+interface AgentResponse {
+  report?: AssessmentReport;
+  toolCalls?: ToolCallEntry[];
+  summary?: string;
+  error?: string;
+}
 
 export default function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -46,14 +37,13 @@ export default function ChatContainer() {
       const userMsg: Message = { role: "user", content };
       const nextMessages = [...messages, userMsg];
 
-      setMessages([...nextMessages, { role: "assistant", content: "" }]);
+      setMessages([...nextMessages, { role: "assistant", content: "Assessing claim…" }]);
       setToolCalls([]);
       setReport(null);
       setIsStreaming(true);
 
       const controller = new AbortController();
       abortRef.current = controller;
-      let assistantText = "";
 
       try {
         const res = await fetch("/api/agent", {
@@ -63,81 +53,26 @@ export default function ChatContainer() {
           signal: controller.signal,
         });
 
-        if (!res.ok || !res.body) {
-          throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as AgentResponse;
+
+        if (!res.ok || data.error) {
+          throw new Error(data.error ?? `HTTP ${res.status}`);
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
+        setMessages([
+          ...nextMessages,
+          { role: "assistant", content: data.summary ?? "Assessment complete." },
+        ]);
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split("\n\n");
-          buf = parts.pop() ?? "";
-
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") break;
-
-            let event: SSEEvent;
-            try {
-              event = JSON.parse(raw) as SSEEvent;
-            } catch {
-              continue;
-            }
-
-            if (event.type === "text") {
-              assistantText += event.text;
-              setMessages((prev) => [
-                ...prev.slice(0, -1),
-                { role: "assistant", content: assistantText },
-              ]);
-            } else if (event.type === "tool-call") {
-              setToolCalls((prev) => [
-                ...prev,
-                {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  input: event.input,
-                  status: "calling",
-                },
-              ]);
-            } else if (event.type === "tool-result") {
-              setToolCalls((prev) =>
-                prev.map((tc) =>
-                  tc.toolCallId === event.toolCallId
-                    ? { ...tc, output: event.output, status: "done" }
-                    : tc,
-                ),
-              );
-            } else if (event.type === "error") {
-              throw new Error(event.message);
-            }
-          }
-        }
-
-        // Extract and strip the <report> block from the displayed text
-        const parsed = parseReportFromText(assistantText);
-        if (parsed) {
-          setReport(parsed);
-          const clean = assistantText
-            .replace(/<report>[\s\S]*?<\/report>/g, "")
-            .trim();
-          setMessages((prev) => [
-            ...prev.slice(0, -1),
-            { role: "assistant", content: clean },
-          ]);
-        }
+        if (data.toolCalls) setToolCalls(data.toolCalls);
+        if (data.report) setReport(data.report);
       } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") return;
-        setMessages((prev) => [
-          ...prev.slice(0, -1),
+        if (err instanceof Error && err.name === "AbortError") {
+          setMessages([...nextMessages, { role: "assistant", content: "Assessment cancelled." }]);
+          return;
+        }
+        setMessages([
+          ...nextMessages,
           {
             role: "assistant",
             content:
@@ -162,10 +97,6 @@ export default function ChatContainer() {
             <h1 className="text-base font-bold text-gray-900">
               Claim Assessment AI
             </h1>
-            {/* <p className="text-xs text-gray-400">
-              Powered by DeepSeek ·{' '}
-              <span className="font-mono">{model}</span>
-            </p> */}
           </div>
           {isStreaming && (
             <span className="flex items-center gap-1.5 text-xs text-blue-500">
@@ -178,7 +109,7 @@ export default function ChatContainer() {
         {/* Messages */}
         <MessageList messages={messages} isStreaming={isStreaming} />
 
-        {/* Tool call log (only while/after streaming) */}
+        {/* Tool call log */}
         {toolCalls.length > 0 && <ToolCallLog toolCalls={toolCalls} />}
 
         {/* Input */}
