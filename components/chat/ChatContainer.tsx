@@ -1,54 +1,64 @@
-'use client';
+"use client";
 
-import { useState, useRef, useCallback } from 'react';
-import { parseReportFromText } from '@/lib/report/generateReport';
-import type { AssessmentReport } from '@/types/report';
-import MessageList from './MessageList';
-import ChatInput from './ChatInput';
-import ToolCallLog, { type ToolCallEntry } from './ToolCallLog';
-import AssessmentReportView from '../report/AssessmentReport';
+import { useState, useRef, useCallback } from "react";
+import { parseReportFromText } from "@/lib/report/generateReport";
+import type { AssessmentReport } from "@/types/report";
+import MessageList from "./MessageList";
+import ChatInput from "./ChatInput";
+import ToolCallLog, { type ToolCallEntry } from "./ToolCallLog";
+import AssessmentReportView from "../report/AssessmentReport";
 
-type DeepSeekModel = 'deepseek-chat' | 'deepseek-reasoner';
+type DeepSeekModel = "deepseek-chat" | "deepseek-reasoner";
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
 type SSEEvent =
-  | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown }
-  | { type: 'error'; message: string };
+  | { type: "text"; text: string }
+  | {
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+    }
+  | {
+      type: "tool-result";
+      toolCallId: string;
+      toolName: string;
+      output: unknown;
+    }
+  | { type: "error"; message: string };
 
 export default function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
   const [report, setReport] = useState<AssessmentReport | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [model, setModel] = useState<DeepSeekModel>('deepseek-chat');
+  const [model, setModel] = useState<DeepSeekModel>("deepseek-chat");
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
     async (content: string) => {
       if (isStreaming || !content.trim()) return;
 
-      const userMsg: Message = { role: 'user', content };
+      const userMsg: Message = { role: "user", content };
       const nextMessages = [...messages, userMsg];
 
-      setMessages([...nextMessages, { role: 'assistant', content: '' }]);
+      setMessages([...nextMessages, { role: "assistant", content: "" }]);
       setToolCalls([]);
       setReport(null);
       setIsStreaming(true);
 
       const controller = new AbortController();
       abortRef.current = controller;
-      let assistantText = '';
+      let assistantText = "";
 
       try {
-        const res = await fetch('/api/agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const res = await fetch("/api/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: nextMessages, model }),
           signal: controller.signal,
         });
@@ -59,21 +69,21 @@ export default function ChatContainer() {
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let buf = '';
+        let buf = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           buf += decoder.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() ?? '';
+          const parts = buf.split("\n\n");
+          buf = parts.pop() ?? "";
 
           for (const part of parts) {
             const line = part.trim();
-            if (!line.startsWith('data: ')) continue;
+            if (!line.startsWith("data: ")) continue;
             const raw = line.slice(6).trim();
-            if (raw === '[DONE]') break;
+            if (raw === "[DONE]") break;
 
             let event: SSEEvent;
             try {
@@ -82,31 +92,31 @@ export default function ChatContainer() {
               continue;
             }
 
-            if (event.type === 'text') {
+            if (event.type === "text") {
               assistantText += event.text;
               setMessages((prev) => [
                 ...prev.slice(0, -1),
-                { role: 'assistant', content: assistantText },
+                { role: "assistant", content: assistantText },
               ]);
-            } else if (event.type === 'tool-call') {
+            } else if (event.type === "tool-call") {
               setToolCalls((prev) => [
                 ...prev,
                 {
                   toolCallId: event.toolCallId,
                   toolName: event.toolName,
                   input: event.input,
-                  status: 'calling',
+                  status: "calling",
                 },
               ]);
-            } else if (event.type === 'tool-result') {
+            } else if (event.type === "tool-result") {
               setToolCalls((prev) =>
                 prev.map((tc) =>
                   tc.toolCallId === event.toolCallId
-                    ? { ...tc, output: event.output, status: 'done' }
+                    ? { ...tc, output: event.output, status: "done" }
                     : tc,
                 ),
               );
-            } else if (event.type === 'error') {
+            } else if (event.type === "error") {
               throw new Error(event.message);
             }
           }
@@ -116,20 +126,22 @@ export default function ChatContainer() {
         const parsed = parseReportFromText(assistantText);
         if (parsed) {
           setReport(parsed);
-          const clean = assistantText.replace(/<report>[\s\S]*?<\/report>/g, '').trim();
+          const clean = assistantText
+            .replace(/<report>[\s\S]*?<\/report>/g, "")
+            .trim();
           setMessages((prev) => [
             ...prev.slice(0, -1),
-            { role: 'assistant', content: clean },
+            { role: "assistant", content: clean },
           ]);
         }
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') return;
+        if (err instanceof Error && err.name === "AbortError") return;
         setMessages((prev) => [
           ...prev.slice(0, -1),
           {
-            role: 'assistant',
+            role: "assistant",
             content:
-              'An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.',
+              "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.",
           },
         ]);
       } finally {
@@ -147,11 +159,13 @@ export default function ChatContainer() {
         {/* Header */}
         <header className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div>
-            <h1 className="text-base font-bold text-gray-900">Claim Assessment AI</h1>
-            <p className="text-xs text-gray-400">
+            <h1 className="text-base font-bold text-gray-900">
+              Claim Assessment AI
+            </h1>
+            {/* <p className="text-xs text-gray-400">
               Powered by DeepSeek ·{' '}
               <span className="font-mono">{model}</span>
-            </p>
+            </p> */}
           </div>
           {isStreaming && (
             <span className="flex items-center gap-1.5 text-xs text-blue-500">

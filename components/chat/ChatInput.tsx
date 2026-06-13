@@ -1,34 +1,36 @@
-'use client';
+"use client";
 
-import { useState, useRef, type KeyboardEvent } from 'react';
+import { useState, useRef, type KeyboardEvent } from "react";
 
-type DeepSeekModel = 'deepseek-chat' | 'deepseek-reasoner';
+type DeepSeekModel = "deepseek-chat" | "deepseek-reasoner";
 
 const SCENARIOS = [
   {
-    label: '✓ Approval (CLM-001)',
-    color: 'green' as const,
+    label: "✓ Approval (CLM-001)",
+    color: "green" as const,
     message:
-      'Please assess claim CLM-001 for John Doe. Policy: POL-001. Claim type: surgery. Diagnosis: appendicitis (K37). Procedures: CPT 44970 (laparoscopic appendectomy). Requested amount: $5,000. Documents to verify: DOC-001 (discharge summary), DOC-002 (itemized bill).',
+      "Please assess claim CLM-001 for John Doe. Policy: POL-001. Claim type: surgery. Diagnosis: appendicitis (K37). Procedures: CPT 44970 (laparoscopic appendectomy). Requested amount: $5,000. Documents to verify: DOC-001 (discharge summary), DOC-002 (itemized bill).",
   },
   {
-    label: '✗ Rejection (CLM-002)',
-    color: 'red' as const,
+    label: "✗ Rejection (CLM-002)",
+    color: "red" as const,
     message:
-      'Please assess claim CLM-002 for Jane Smith. Policy: POL-002. Claim type: elective. Diagnosis: elective cosmetic surgery (Z41.1). Procedures: CPT 15829 (rhytidectomy). Requested amount: $8,000. Documents to verify: DOC-004 (medical bill), DOC-005 (referral).',
+      "Please assess claim CLM-002 for Jane Smith. Policy: POL-002. Claim type: elective. Diagnosis: elective cosmetic surgery (Z41.1). Procedures: CPT 15829 (rhytidectomy). Requested amount: $8,000. Documents to verify: DOC-004 (medical bill), DOC-005 (referral).",
   },
   {
-    label: '? More Info (CLM-003)',
-    color: 'yellow' as const,
+    label: "? More Info (CLM-003)",
+    color: "yellow" as const,
     message:
-      'Please assess claim CLM-003 for Bob Johnson. Policy: POL-003. Claim type: surgery. Diagnosis: femoral fracture (S72.001A). Procedures: CPT 27244 (ORIF femur). Requested amount: $12,000. Documents to verify: DOC-006 (discharge summary), DOC-003 (itemized bill).',
+      "Please assess claim CLM-003 for Bob Johnson. Policy: POL-003. Claim type: surgery. Diagnosis: femoral fracture (S72.001A). Procedures: CPT 27244 (ORIF femur). Requested amount: $12,000. Documents to verify: DOC-006 (discharge summary), DOC-003 (itemized bill).",
   },
 ];
 
 const SCENARIO_CLASSES = {
-  green: 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200',
-  red: 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200',
-  yellow: 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-200',
+  green:
+    "bg-green-50 text-green-700 hover:bg-green-100 border border-green-200",
+  red: "bg-red-50 text-red-700 hover:bg-red-100 border border-red-200",
+  yellow:
+    "bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-200",
 };
 
 interface ChatInputProps {
@@ -39,20 +41,26 @@ interface ChatInputProps {
   onAbort: () => void;
 }
 
-export default function ChatInput({ onSend, isStreaming, model, onModelChange, onAbort }: ChatInputProps) {
-  const [text, setText] = useState('');
+export default function ChatInput({
+  onSend,
+  isStreaming,
+  model,
+  onModelChange,
+  onAbort,
+}: ChatInputProps) {
+  const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const submit = () => {
     const trimmed = text.trim();
     if (!trimmed || isStreaming) return;
     onSend(trimmed);
-    setText('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setText("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
@@ -61,7 +69,7 @@ export default function ChatInput({ onSend, isStreaming, model, onModelChange, o
   const onInput = () => {
     const ta = textareaRef.current;
     if (ta) {
-      ta.style.height = 'auto';
+      ta.style.height = "auto";
       ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
   };
@@ -84,7 +92,7 @@ export default function ChatInput({ onSend, isStreaming, model, onModelChange, o
 
       {/* Input row */}
       <div className="flex items-end gap-2">
-        <select
+        {/* <select
           value={model}
           onChange={(e) => onModelChange(e.target.value as DeepSeekModel)}
           disabled={isStreaming}
@@ -92,7 +100,7 @@ export default function ChatInput({ onSend, isStreaming, model, onModelChange, o
         >
           <option value="deepseek-chat">deepseek-chat</option>
           <option value="deepseek-reasoner">deepseek-reasoner</option>
-        </select>
+        </select> */}
 
         <textarea
           ref={textareaRef}

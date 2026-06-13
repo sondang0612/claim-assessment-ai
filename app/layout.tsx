@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Claim Assessment AI",
-  description: "AI-powered insurance claim assessment powered by DeepSeek",
+  description: "AI-powered insurance claim assessment",
 };
 
 export default function RootLayout({
