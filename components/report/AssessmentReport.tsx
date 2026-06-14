@@ -121,7 +121,29 @@ export default function AssessmentReportView({
               >
                 {sections.policyVerification.status}
               </span>
+              {sections.policyVerification.coverageDetails?.annualDeductibleMet !== undefined && (
+                <>
+                  <span className="text-gray-400">Annual Deductible</span>
+                  <span className={`font-semibold ${sections.policyVerification.coverageDetails.annualDeductibleMet ? "text-green-600" : "text-orange-600"}`}>
+                    {sections.policyVerification.coverageDetails.annualDeductibleMet ? "Met" : "Not yet met"}
+                  </span>
+                </>
+              )}
             </div>
+            {Array.isArray(sections.policyVerification.coverageDetails?.coverages) &&
+              sections.policyVerification.coverageDetails.coverages.length > 0 && (
+                <div className="mt-3 space-y-1.5">
+                  <p className="text-xs font-medium text-gray-500">Coverage Summary</p>
+                  {sections.policyVerification.coverageDetails.coverages.map((cov, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                      <span className="text-gray-600 capitalize">{cov.claimType}</span>
+                      <span className="text-gray-700 font-semibold">
+                        {cov.coveragePercent}% · max ${cov.maxBenefit.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
           </ReportSection>
         ) : (
           <Pending label="Policy Verification" />
@@ -228,13 +250,10 @@ export default function AssessmentReportView({
 
         {/* Decision Mapping — audit trail */}
         {sections.decisionMapping && sections.decisionMapping.length > 0 && (
-          <ReportSection title="Audit Trail" icon="🔍" defaultOpen={false}>
+          <ReportSection title="Audit Trail" icon="🔍" defaultOpen={true}>
             <div className="space-y-2">
               {sections.decisionMapping.map((entry, i) => (
-                <div
-                  key={i}
-                  className="flex items-start gap-2.5 text-xs"
-                >
+                <div key={i} className="flex items-start gap-2.5 text-xs">
                   <span
                     className={`mt-0.5 flex-shrink-0 w-10 text-center font-bold px-1.5 py-0.5 rounded-full ${
                       entry.status === "PASS"
@@ -267,14 +286,17 @@ export default function AssessmentReportView({
 
         {/* Reasoning — key drivers */}
         {sections.reasoning && (
-          <ReportSection title="Reasoning" icon="💡" defaultOpen={false}>
+          <ReportSection title="Reasoning" icon="💡" defaultOpen={true}>
             <p className="text-xs text-gray-600 mb-2">
               {sections.reasoning.summary}
             </p>
             {sections.reasoning.keyDrivers.length > 0 && (
               <ul className="space-y-1">
                 {sections.reasoning.keyDrivers.map((driver, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-xs text-gray-500">
+                  <li
+                    key={i}
+                    className="flex items-start gap-1.5 text-xs text-gray-500"
+                  >
                     <span className="flex-shrink-0 mt-1 w-1 h-1 rounded-full bg-gray-400" />
                     <span>{driver}</span>
                   </li>
