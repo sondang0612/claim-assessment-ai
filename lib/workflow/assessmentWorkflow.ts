@@ -1,9 +1,7 @@
-import { verifyDocument } from '@/lib/tools/verifyDocument';
-import { lookupPolicy } from '@/lib/tools/lookupPolicy';
-import { checkMedicalNecessity } from '@/lib/tools/checkMedicalNecessity';
-import { calculateBenefit } from '@/lib/tools/calculateBenefit';
+import { ClaimDataManager } from '@/lib/domain/ClaimDataManager';
+import type { CalculateBenefitResult } from '@/lib/domain/ClaimDataManager';
 import type { ParsedClaim } from '@/lib/parser/claimParser';
-import type { AssessmentReport, DecisionFactor, DocumentFinding, PolicyCitation, Recommendation, ReasoningSection } from '@/types/report';
+import type { AssessmentReport, DecisionFactor, PolicyCitation, Recommendation, ReasoningSection } from '@/types/report';
 import type { WorkflowToolCall, WorkflowEvent } from '@/types/workflow';
 
 export interface WorkflowResult {
@@ -16,49 +14,23 @@ export interface WorkflowResult {
  * Executes the full claim assessment workflow deterministically.
  *
  * Sequence: verify documents → lookup policy → check medical necessity → calculate benefit (if approved)
- * All business rules (approval/rejection/more-info) are applied in TypeScript — no LLM involvement.
+ * All business rules are applied in TypeScript — no LLM involvement.
+ * All data access goes through ClaimDataManager; no direct calls to lib/data or lib/tools.
  */
 export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
-  const toolCalls: WorkflowToolCall[] = [];
-  let callIndex = 0;
-
-  function record<T>(toolName: string, input: Record<string, unknown>, output: T): T {
-    toolCalls.push({ toolCallId: `tool-${++callIndex}`, toolName, input, output, status: 'done' });
-    return output;
-  }
-
+  const manager = new ClaimDataManager(claim);
   const today = new Date().toISOString().split('T')[0];
 
-  // Step 1: Verify all documents
-  const docResults = claim.documentIds.map((documentId) => ({
-    documentId,
-    result: record('verifyDocument', { documentId }, verifyDocument({ documentId })),
-  }));
+  // Steps 1–3: run all mandatory checks (memoized in manager)
+  manager.verifyDocuments();
+  manager.lookupPolicy();
+  manager.getMedicalNecessity();
 
-  // Step 2: Look up policy
-  const policyResult = record(
-    'lookupPolicy',
-    { policyId: claim.policyId },
-    lookupPolicy({ policyId: claim.policyId }),
-  );
+  const allDocsValid = manager.areAllDocsValid();
+  const policyActive = manager.isPolicyActive();
+  const claimTypeExcluded = manager.isClaimTypeExcluded();
+  const necessityResult = manager.getMedicalNecessity();
 
-  // Step 3: Check medical necessity (always run — needed for the report regardless of outcome)
-  const necessityResult = record(
-    'checkMedicalNecessity',
-    { diagnosis: claim.diagnosis, procedures: claim.procedures },
-    checkMedicalNecessity({ diagnosis: claim.diagnosis, procedures: claim.procedures }),
-  );
-
-  // Evaluate conditions
-  const invalidDocs = docResults.filter(({ result }) => !result.success || !result.valid);
-  const allDocsValid = invalidDocs.length === 0;
-
-  const policy = policyResult.success ? policyResult.policy : null;
-  const policyActive = policy !== null && policy.status === 'active';
-  const claimTypeExcluded =
-    policyActive && (policy?.exclusions.some((e) => e.claimTypes.includes(claim.claimType)) ?? false);
-
-  // Apply decision rules
   let recommendation: Recommendation;
   if (!allDocsValid) {
     recommendation = 'MORE_INFO_REQUIRED';
@@ -68,110 +40,84 @@ export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
     recommendation = 'APPROVED';
   }
 
-  // Step 4: Calculate benefit — only when all prior conditions pass
-  const benefitResult =
-    recommendation === 'APPROVED'
-      ? record(
-          'calculateBenefit',
-          { policyId: claim.policyId, claimType: claim.claimType, amount: claim.requestedAmount },
-          calculateBenefit({
-            policyId: claim.policyId,
-            claimType: claim.claimType,
-            amount: claim.requestedAmount,
-          }),
-        )
-      : null;
-
-  // Downgrade to REJECTED if benefit calculation fails despite passing earlier checks
-  if (benefitResult !== null && !benefitResult.success) {
-    recommendation = 'REJECTED';
+  // Step 4: benefit — only when prior checks pass
+  let benefitResult: CalculateBenefitResult | null = null;
+  if (recommendation === 'APPROVED') {
+    benefitResult = manager.calculateBenefit();
+    if (!benefitResult.success) recommendation = 'REJECTED';
   }
 
-  // Build document findings
-  const docFindings: DocumentFinding[] = docResults.map(({ documentId, result }) => ({
-    documentId,
-    documentType: result.success ? result.documentType : 'unknown',
-    status: !result.success ? 'not found' : result.valid ? 'valid' : 'invalid',
-    issues: result.success ? result.issues : [result.error],
-  }));
+  // Derive report data from manager
+  const docFindings = manager.getAllDocuments();
+  const health = manager.getDocumentHealthSummary();
+  const policy = manager.getPolicySnapshot();
+  const matchedExclusion = manager.getMatchedExclusion();
+  const matchedCoverage = manager.getMatchedCoverageClause();
+  const invalidCount = health.invalid + health.missing;
+  const b = benefitResult?.success ? benefitResult : null;
 
-  // Build policy citations from structured policy data
+  // Policy citations
   const policyCitations: PolicyCitation[] = [];
   if (policy?.notes) {
     policyCitations.push({ clauseId: null, type: 'notes', section: 'Policy Notes', text: policy.notes });
   }
-  if (claimTypeExcluded && policy) {
-    const excl = policy.exclusions.find((e) => e.claimTypes.includes(claim.claimType));
-    if (excl) policyCitations.push({ clauseId: excl.clauseId, type: 'exclusion', section: 'Exclusion', text: excl.description });
-  } else if (policyActive && policy) {
-    const coverageClause = policy.coverageClauses.find((c) => c.claimType === claim.claimType);
-    if (coverageClause) {
-      policyCitations.push({ clauseId: coverageClause.clauseId, type: coverageClause.type, section: 'Coverage', text: coverageClause.description });
-    }
+  if (claimTypeExcluded && matchedExclusion) {
+    policyCitations.push({ clauseId: matchedExclusion.clauseId, type: 'exclusion', section: 'Exclusion', text: matchedExclusion.description });
+  } else if (policyActive && matchedCoverage) {
+    policyCitations.push({ clauseId: matchedCoverage.clauseId, type: matchedCoverage.type, section: 'Coverage', text: matchedCoverage.description });
   }
 
-  // Build audit decision mapping — one entry per evaluation factor
-  const decisionMapping: DecisionFactor[] = [];
+  // Audit decision mapping
+  const decisionMapping: DecisionFactor[] = [
+    {
+      factor: 'DOCUMENT',
+      status: allDocsValid ? 'PASS' : 'FAIL',
+      clauseId: null,
+      explanation: allDocsValid
+        ? `All ${health.total} document(s) verified successfully.`
+        : `Document(s) ${health.invalidIds.join(', ')} are missing or invalid.`,
+    },
+    {
+      factor: 'POLICY',
+      status: policyActive && !claimTypeExcluded && matchedCoverage ? 'PASS' : 'FAIL',
+      clauseId: matchedExclusion?.clauseId ?? matchedCoverage?.clauseId ?? null,
+      explanation: !policyActive
+        ? `Policy ${claim.policyId} is not active.`
+        : claimTypeExcluded && matchedExclusion
+          ? `Claim type "${claim.claimType}" is excluded under clause ${matchedExclusion.clauseId}: ${matchedExclusion.description}`
+          : matchedCoverage
+            ? `Coverage confirmed under clause ${matchedCoverage.clauseId}.`
+            : `No coverage found for claim type "${claim.claimType}".`,
+    },
+    {
+      factor: 'MEDICAL',
+      status: necessityResult.necessary ? 'PASS' : 'FAIL',
+      clauseId: null,
+      explanation: necessityResult.necessary
+        ? `Medical necessity confirmed. ${necessityResult.rationale}`
+        : `Medical necessity not established. ${necessityResult.rationale}`,
+    },
+    {
+      factor: 'BENEFIT',
+      status: b ? 'PASS' : 'FAIL',
+      clauseId: matchedCoverage?.clauseId ?? null,
+      explanation: b
+        ? `Covered at ${b.coveragePercent}%. Covered amount: $${b.coveredAmount} (deductible $${b.deductibleApplied} applied).`
+        : 'Not applicable — claim was not approved or benefit calculation failed.',
+    },
+  ];
 
-  const docStatus: DecisionFactor['status'] = allDocsValid ? 'PASS' : 'FAIL';
-  decisionMapping.push({
-    factor: 'DOCUMENT',
-    status: docStatus,
-    clauseId: null,
-    explanation: allDocsValid
-      ? `All ${docResults.length} document(s) verified successfully.`
-      : `Document(s) ${invalidDocs.map(({ documentId }) => documentId).join(', ')} are missing or invalid.`,
-  });
-
-  const matchedExclusion = policyActive && policy ? policy.exclusions.find((e) => e.claimTypes.includes(claim.claimType)) : undefined;
-  const matchedCoverage = policyActive && policy ? policy.coverageClauses.find((c) => c.claimType === claim.claimType) : undefined;
-  decisionMapping.push({
-    factor: 'POLICY',
-    status: policyActive && !claimTypeExcluded && matchedCoverage ? 'PASS' : 'FAIL',
-    clauseId: matchedExclusion?.clauseId ?? matchedCoverage?.clauseId ?? null,
-    explanation: !policyActive
-      ? `Policy ${claim.policyId} is not active.`
-      : claimTypeExcluded && matchedExclusion
-        ? `Claim type "${claim.claimType}" is excluded under clause ${matchedExclusion.clauseId}: ${matchedExclusion.description}`
-        : matchedCoverage
-          ? `Coverage confirmed under clause ${matchedCoverage.clauseId}.`
-          : `No coverage found for claim type "${claim.claimType}".`,
-  });
-
-  decisionMapping.push({
-    factor: 'MEDICAL',
-    status: necessityResult.necessary ? 'PASS' : 'FAIL',
-    clauseId: null,
-    explanation: necessityResult.necessary
-      ? `Medical necessity confirmed. ${necessityResult.rationale}`
-      : `Medical necessity not established. ${necessityResult.rationale}`,
-  });
-
-  const b = benefitResult?.success ? benefitResult : null;
-  decisionMapping.push({
-    factor: 'BENEFIT',
-    status: b ? 'PASS' : 'FAIL',
-    clauseId: matchedCoverage?.clauseId ?? null,
-    explanation: b
-      ? `Covered at ${b.coveragePercent}%. Covered amount: $${b.coveredAmount} (deductible $${b.deductibleApplied} applied).`
-      : 'Not applicable — claim was not approved or benefit calculation failed.',
-  });
-
-  // Build recommendation reasoning string
+  // Recommendation reasoning
   let reasoningText: string;
   if (recommendation === 'MORE_INFO_REQUIRED') {
-    const ids = docFindings
-      .filter((f) => f.status !== 'valid')
-      .map((f) => f.documentId)
-      .join(', ');
+    const ids = docFindings.filter((f) => f.status !== 'valid').map((f) => f.documentId).join(', ');
     reasoningText = `Document(s) ${ids} are missing or invalid. Valid documentation is required before assessment can proceed.`;
   } else if (recommendation === 'REJECTED') {
     if (!policyActive) {
       reasoningText = `Policy ${claim.policyId} is not active.`;
     } else if (claimTypeExcluded) {
-      const excl = policy?.exclusions.find((e) => e.claimTypes.includes(claim.claimType));
-      reasoningText = excl
-        ? `Claim type "${claim.claimType}" is excluded (${excl.clauseId}): ${excl.description}`
+      reasoningText = matchedExclusion
+        ? `Claim type "${claim.claimType}" is excluded (${matchedExclusion.clauseId}): ${matchedExclusion.description}`
         : `Claim type "${claim.claimType}" is excluded under this policy.`;
     } else {
       reasoningText = `Medical necessity not established. ${necessityResult.rationale}`;
@@ -182,7 +128,6 @@ export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
       : 'All criteria met.';
   }
 
-  // Build structured reasoning section
   const reasoning: ReasoningSection = {
     summary: reasoningText,
     keyDrivers: decisionMapping.map((d) => {
@@ -199,8 +144,8 @@ export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
     sections: {
       documentReview: {
         summary: allDocsValid
-          ? `All ${docResults.length} document(s) verified successfully.`
-          : `${invalidDocs.length} of ${docResults.length} document(s) failed verification.`,
+          ? `All ${health.total} document(s) verified successfully.`
+          : `${invalidCount} of ${health.total} document(s) failed verification.`,
         findings: docFindings,
       },
       policyVerification: {
@@ -211,11 +156,7 @@ export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
         holderName: policy?.holderName ?? '',
         status: policy?.status ?? 'not found',
         coverageDetails: policy
-          ? {
-              coverages: policy.coverages,
-              exclusions: policy.exclusions,
-              annualDeductibleMet: policy.annualDeductibleMet,
-            }
+          ? { coverages: policy.coverages, exclusions: policy.exclusions, annualDeductibleMet: policy.annualDeductibleMet }
           : {},
       },
       medicalNecessity: {
@@ -226,109 +167,91 @@ export function runAssessmentWorkflow(claim: ParsedClaim): WorkflowResult {
         rationale: necessityResult.rationale,
         codes: necessityResult.approvedProcedures,
       },
-      benefitCalculation:
-        benefitResult?.success === true
-          ? {
-              summary: benefitResult.details,
-              requestedAmount: claim.requestedAmount,
-              coveredAmount: benefitResult.coveredAmount,
-              patientResponsibility: benefitResult.patientResponsibility,
-              deductibleApplied: benefitResult.deductibleApplied,
-            }
-          : {
-              summary:
-                recommendation === 'APPROVED'
-                  ? 'Benefit calculation failed.'
-                  : 'Not applicable — claim was not approved.',
-              requestedAmount: claim.requestedAmount,
-              coveredAmount: 0,
-              patientResponsibility: claim.requestedAmount,
-              deductibleApplied: 0,
-            },
-      recommendation: {
-        decision: recommendation,
-        reasoning: reasoningText,
-      },
+      benefitCalculation: b
+        ? {
+            summary: b.details,
+            requestedAmount: claim.requestedAmount,
+            coveredAmount: b.coveredAmount,
+            patientResponsibility: b.patientResponsibility,
+            deductibleApplied: b.deductibleApplied,
+          }
+        : {
+            summary: recommendation === 'APPROVED' ? 'Benefit calculation failed.' : 'Not applicable — claim was not approved.',
+            requestedAmount: claim.requestedAmount,
+            coveredAmount: 0,
+            patientResponsibility: claim.requestedAmount,
+            deductibleApplied: 0,
+          },
+      recommendation: { decision: recommendation, reasoning: reasoningText },
       policyCitations,
       decisionMapping,
       reasoning,
     },
   };
 
-  const bCalc = benefitResult?.success ? benefitResult : null;
-  const summary =
-    recommendation === 'APPROVED'
-      ? `Claim ${claim.claimId} for ${claim.patientName}: APPROVED. Covered: $${bCalc?.coveredAmount ?? 0} (deductible $${bCalc?.deductibleApplied ?? 0} applied). Patient responsibility: $${bCalc?.patientResponsibility ?? claim.requestedAmount}.`
-      : recommendation === 'REJECTED'
-        ? `Claim ${claim.claimId} for ${claim.patientName}: REJECTED. ${reasoningText}`
-        : `Claim ${claim.claimId} for ${claim.patientName}: MORE INFORMATION REQUIRED. ${reasoningText}`;
+  const summary = recommendation === 'APPROVED'
+    ? `Claim ${claim.claimId} for ${claim.patientName}: APPROVED. Covered: $${b?.coveredAmount ?? 0} (deductible $${b?.deductibleApplied ?? 0} applied). Patient responsibility: $${b?.patientResponsibility ?? claim.requestedAmount}.`
+    : recommendation === 'REJECTED'
+      ? `Claim ${claim.claimId} for ${claim.patientName}: REJECTED. ${reasoningText}`
+      : `Claim ${claim.claimId} for ${claim.patientName}: MORE INFORMATION REQUIRED. ${reasoningText}`;
 
-  return { report, toolCalls, summary };
+  return { report, toolCalls: [...manager.toolCalls], summary };
 }
 
 /**
  * Streaming variant of the assessment workflow.
  * Yields WorkflowEvent objects as each step completes so the API route can
- * forward them to the client via SSE.  Business logic is identical to
+ * forward them to the client via SSE. Business logic is identical to
  * runAssessmentWorkflow — only the delivery mechanism differs.
+ *
+ * All tool calls go through ClaimDataManager. The workflow controls SSE event
+ * emission; the manager controls data access and memoization.
  */
 export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenerator<WorkflowEvent> {
-  const toolCalls: WorkflowToolCall[] = [];
-  let callIndex = 0;
-
-  function record<T>(toolName: string, input: Record<string, unknown>, output: T): T {
-    toolCalls.push({ toolCallId: `tool-${++callIndex}`, toolName, input, output, status: 'done' });
-    return output;
-  }
-
+  const manager = new ClaimDataManager(claim);
   const today = new Date().toISOString().split('T')[0];
 
   yield { type: 'workflow-start', claimId: claim.claimId };
 
-  // ── Step 1: Document Verification ────────────────────────────────────────────
+  // ── Step 1: Document Verification ─────────────────────────────────────────
   yield { type: 'step-start', step: 1, stepName: 'Document Verification' };
 
-  const docResults: { documentId: string; result: ReturnType<typeof verifyDocument> }[] = [];
-
   for (const documentId of claim.documentIds) {
-    const nextId = `tool-${callIndex + 1}`;
-    yield { type: 'tool-start', toolCallId: nextId, toolName: 'verifyDocument', input: { documentId }, step: 1 };
+    yield { type: 'tool-start', toolCallId: manager.peekNextCallId(), toolName: 'verifyDocument', input: { documentId }, step: 1 };
 
-    const result = record('verifyDocument', { documentId }, verifyDocument({ documentId }));
-    const tc = toolCalls[toolCalls.length - 1];
+    const result = manager.verifyDocument(documentId);
+    const tc = manager.getLastToolCall();
 
     let line: string;
     if (result.success && result.valid) {
-      line = `✓ ${documentId} verified`;
+      const docType = result.documentType.replace(/_/g, ' ');
+      const prov = result.provider ? ` · ${result.provider}` : '';
+      line = `✓ ${documentId} · ${docType}${prov} — valid`;
     } else if (result.success) {
-      line = `✗ ${documentId} invalid${result.issues.length > 0 ? ` (${result.issues.join(', ')})` : ''}`;
+      const docType = result.documentType.replace(/_/g, ' ');
+      const issueText = result.issues.length > 0
+        ? `\n   ↳ ${result.issues[0]}`
+        : '';
+      line = `✗ ${documentId} · ${docType} — not valid${issueText}`;
     } else {
-      line = `✗ ${documentId} not found`;
+      line = `✗ ${documentId} — ${result.error}`;
     }
 
     yield { type: 'tool-complete', toolCall: { ...tc, status: 'completed' }, line, step: 1 };
     yield { type: 'step-result', toolCall: tc, line };
-    docResults.push({ documentId, result });
   }
 
-  const invalidDocs = docResults.filter(({ result }) => !result.success || !result.valid);
-  const allDocsValid = invalidDocs.length === 0;
-
-  // Build docFindings here so step 1 report-update can include them.
-  const docFindings: DocumentFinding[] = docResults.map(({ documentId, result }) => ({
-    documentId,
-    documentType: result.success ? result.documentType : 'unknown',
-    status: !result.success ? 'not found' : result.valid ? 'valid' : 'invalid',
-    issues: result.success ? result.issues : [result.error],
-  }));
+  const allDocsValid = manager.areAllDocsValid();
+  const health = manager.getDocumentHealthSummary();
+  const docFindings = manager.getAllDocuments();
 
   yield {
     type: 'step-complete',
     step: 1,
     stepName: 'Document Verification',
     summary: allDocsValid
-      ? `All ${docResults.length} document(s) verified`
-      : `${invalidDocs.length} of ${docResults.length} document(s) failed`,
+      ? `All ${health.total} document(s) verified`
+      : `${health.invalid + health.missing} of ${health.total} document(s) failed`,
   };
 
   yield {
@@ -342,73 +265,66 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
       sections: {
         documentReview: {
           summary: allDocsValid
-            ? `All ${docResults.length} document(s) verified successfully.`
-            : `${invalidDocs.length} of ${docResults.length} document(s) failed verification.`,
+            ? `All ${health.total} document(s) verified successfully.`
+            : `${health.invalid + health.missing} of ${health.total} document(s) failed verification.`,
           findings: docFindings,
         },
       },
     },
   };
 
-  // ── Step 2: Policy Verification ───────────────────────────────────────────────
+  // ── Step 2: Policy Verification ────────────────────────────────────────────
   yield { type: 'step-start', step: 2, stepName: 'Policy Verification' };
+  yield { type: 'tool-start', toolCallId: manager.peekNextCallId(), toolName: 'lookupPolicy', input: { policyId: claim.policyId }, step: 2 };
 
-  const policyNextId = `tool-${callIndex + 1}`;
-  yield { type: 'tool-start', toolCallId: policyNextId, toolName: 'lookupPolicy', input: { policyId: claim.policyId }, step: 2 };
-
-  const policyResult = record(
-    'lookupPolicy',
-    { policyId: claim.policyId },
-    lookupPolicy({ policyId: claim.policyId }),
-  );
-  const policyTc = toolCalls[toolCalls.length - 1];
-
-  const policy = policyResult.success ? policyResult.policy : null;
-  const policyActive = policy !== null && policy.status === 'active';
-  const claimTypeExcluded =
-    policyActive && (policy?.exclusions.some((e) => e.claimTypes.includes(claim.claimType)) ?? false);
+  manager.lookupPolicy();
+  const policyTc = manager.getLastToolCall();
+  const policy = manager.getPolicySnapshot();
+  const policyActive = manager.isPolicyActive();
+  const claimTypeExcluded = manager.isClaimTypeExcluded();
+  const matchedExcl = manager.getMatchedExclusion();
+  const matchedCov = manager.getMatchedCoverageClause();
 
   let policyLine: string;
-  if (!policyResult.success) {
-    policyLine = `✗ Policy ${claim.policyId} not found`;
+  if (!policy) {
+    policyLine = `✗ Policy ${claim.policyId} not found in system`;
   } else if (!policyActive) {
-    policyLine = `✗ Policy ${claim.policyId} is ${policy?.status ?? 'inactive'}`;
+    policyLine = `✗ Policy ${claim.policyId} (${policy.holderName}) is ${policy.status}`;
   } else {
-    const hasCoverage = policy!.coverages.some((c) => c.claimType === claim.claimType);
-    policyLine = `✓ Policy active`;
-    if (claimTypeExcluded) {
-      policyLine += `\n✗ ${claim.claimType} is excluded`;
-    } else if (hasCoverage) {
-      policyLine += `\n✓ ${claim.claimType} coverage found`;
+    const deductibleNote = policy.annualDeductibleMet
+      ? 'annual deductible met'
+      : 'annual deductible not yet met';
+    policyLine = `✓ Policy ${claim.policyId} active — ${policy.holderName} (expires ${policy.expirationDate})\n  ${deductibleNote}`;
+    if (claimTypeExcluded && matchedExcl) {
+      policyLine += `\n✗ Claim type "${claim.claimType}" excluded under ${matchedExcl.clauseId}\n  "${matchedExcl.description}"`;
     } else {
-      policyLine += `\n✗ No ${claim.claimType} coverage`;
+      const cov = manager.getCoverage(claim.claimType);
+      if (cov) {
+        const preAuth = cov.requiresPreAuth ? ' · pre-authorization required' : '';
+        policyLine += `\n✓ ${claim.claimType} coverage: ${cov.coveragePercent}% up to $${cov.maxBenefit.toLocaleString()} (deductible $${cov.deductible.toLocaleString()})${preAuth}`;
+        if (matchedCov) {
+          policyLine += `\n  ${matchedCov.clauseId}: "${matchedCov.description}"`;
+        }
+      } else {
+        policyLine += `\n✗ No coverage for claim type "${claim.claimType}" under this policy`;
+      }
     }
   }
 
   yield { type: 'tool-complete', toolCall: { ...policyTc, status: 'completed' }, line: policyLine, step: 2 };
   yield { type: 'step-result', toolCall: policyTc, line: policyLine };
 
-  // Build policyCitations here — all data is available immediately after step 2.
   const policyCitations: PolicyCitation[] = [];
   if (policy?.notes) {
     policyCitations.push({ clauseId: null, type: 'notes', section: 'Policy Notes', text: policy.notes });
   }
-  if (claimTypeExcluded && policy) {
-    const excl = policy.exclusions.find((e) => e.claimTypes.includes(claim.claimType));
-    if (excl) policyCitations.push({ clauseId: excl.clauseId, type: 'exclusion', section: 'Exclusion', text: excl.description });
-  } else if (policyActive && policy) {
-    const coverageClause = policy.coverageClauses.find((c) => c.claimType === claim.claimType);
-    if (coverageClause) {
-      policyCitations.push({ clauseId: coverageClause.clauseId, type: coverageClause.type, section: 'Coverage', text: coverageClause.description });
-    }
+  if (claimTypeExcluded && matchedExcl) {
+    policyCitations.push({ clauseId: matchedExcl.clauseId, type: 'exclusion', section: 'Exclusion', text: matchedExcl.description });
+  } else if (policyActive && matchedCov) {
+    policyCitations.push({ clauseId: matchedCov.clauseId, type: matchedCov.type, section: 'Coverage', text: matchedCov.description });
   }
 
-  yield {
-    type: 'step-complete',
-    step: 2,
-    stepName: 'Policy Verification',
-    summary: policyActive ? 'Policy active' : 'Policy inactive',
-  };
+  yield { type: 'step-complete', step: 2, stepName: 'Policy Verification', summary: policyActive ? 'Policy active' : 'Policy inactive' };
 
   yield {
     type: 'report-update',
@@ -425,11 +341,7 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
           holderName: policy?.holderName ?? '',
           status: policy?.status ?? 'not found',
           coverageDetails: policy
-            ? {
-                coverages: policy.coverages,
-                exclusions: policy.exclusions,
-                annualDeductibleMet: policy.annualDeductibleMet,
-              }
+            ? { coverages: policy.coverages, exclusions: policy.exclusions, annualDeductibleMet: policy.annualDeductibleMet }
             : {},
         },
         policyCitations,
@@ -437,38 +349,37 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     },
   };
 
-  // ── Step 3: Medical Necessity ────────────────────────────────────────────────
+  // ── Step 3: Medical Necessity ──────────────────────────────────────────────
   yield { type: 'step-start', step: 3, stepName: 'Medical Necessity' };
-
-  const necessityNextId = `tool-${callIndex + 1}`;
   yield {
     type: 'tool-start',
-    toolCallId: necessityNextId,
+    toolCallId: manager.peekNextCallId(),
     toolName: 'checkMedicalNecessity',
     input: { diagnosis: claim.diagnosis, procedures: claim.procedures },
     step: 3,
   };
 
-  const necessityResult = record(
-    'checkMedicalNecessity',
-    { diagnosis: claim.diagnosis, procedures: claim.procedures },
-    checkMedicalNecessity({ diagnosis: claim.diagnosis, procedures: claim.procedures }),
-  );
-  const necessityTc = toolCalls[toolCalls.length - 1];
+  manager.getMedicalNecessity();
+  const necessityTc = manager.getLastToolCall();
+  const necessityResult = manager.getMedicalNecessity(); // instant — already cached
 
-  const necessityLine = necessityResult.necessary
-    ? `✓ Procedure medically necessary`
-    : `✗ Medical necessity not established`;
+  let necessityLine: string;
+  if (necessityResult.necessary) {
+    const cptList = necessityResult.approvedProcedures.length > 0
+      ? `\n  Approved CPT codes: ${necessityResult.approvedProcedures.join(', ')}`
+      : '';
+    const reqList = necessityResult.requestedProcedures.length > 0
+      ? `\n  Requested procedure(s): ${necessityResult.requestedProcedures.join(', ')}`
+      : '';
+    necessityLine = `Diagnosis: ${claim.diagnosis}\n✓ Medical necessity established\n  ${necessityResult.rationale}${cptList}${reqList}`;
+  } else {
+    necessityLine = `Diagnosis: ${claim.diagnosis}\n✗ Medical necessity not established\n  ${necessityResult.rationale}`;
+  }
 
   yield { type: 'tool-complete', toolCall: { ...necessityTc, status: 'completed' }, line: necessityLine, step: 3 };
   yield { type: 'step-result', toolCall: necessityTc, line: necessityLine };
 
-  yield {
-    type: 'step-complete',
-    step: 3,
-    stepName: 'Medical Necessity',
-    summary: necessityResult.necessary ? 'Medically necessary' : 'Not medically necessary',
-  };
+  yield { type: 'step-complete', step: 3, stepName: 'Medical Necessity', summary: necessityResult.necessary ? 'Medically necessary' : 'Not medically necessary' };
 
   yield {
     type: 'report-update',
@@ -489,7 +400,7 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     },
   };
 
-  // ── Decision rules ───────────────────────────────────────────────────────────
+  // ── Decision ───────────────────────────────────────────────────────────────
   let recommendation: Recommendation;
   if (!allDocsValid) {
     recommendation = 'MORE_INFO_REQUIRED';
@@ -499,7 +410,6 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     recommendation = 'APPROVED';
   }
 
-  // For non-approved claims, populate the benefit section immediately so "Pending…" never shows.
   if (recommendation !== 'APPROVED') {
     yield {
       type: 'report-update',
@@ -520,35 +430,36 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     };
   }
 
-  // ── Step 4: Benefit Calculation (only when APPROVED) ─────────────────────────
-  let benefitResult: ReturnType<typeof calculateBenefit> | null = null;
+  // ── Step 4: Benefit Calculation (APPROVED only) ────────────────────────────
+  let benefitResult: CalculateBenefitResult | null = null;
 
   if (recommendation === 'APPROVED') {
     yield { type: 'step-start', step: 4, stepName: 'Benefit Calculation' };
-
-    const benefitNextId = `tool-${callIndex + 1}`;
     yield {
       type: 'tool-start',
-      toolCallId: benefitNextId,
+      toolCallId: manager.peekNextCallId(),
       toolName: 'calculateBenefit',
       input: { policyId: claim.policyId, claimType: claim.claimType, amount: claim.requestedAmount },
       step: 4,
     };
 
-    benefitResult = record(
-      'calculateBenefit',
-      { policyId: claim.policyId, claimType: claim.claimType, amount: claim.requestedAmount },
-      calculateBenefit({
-        policyId: claim.policyId,
-        claimType: claim.claimType,
-        amount: claim.requestedAmount,
-      }),
-    );
-    const benefitTc = toolCalls[toolCalls.length - 1];
+    benefitResult = manager.calculateBenefit();
+    const benefitTc = manager.getLastToolCall();
 
-    const benefitLine = benefitResult.success
-      ? `✓ Covered amount: $${benefitResult.coveredAmount}`
-      : `✗ Benefit calculation failed`;
+    let benefitLine: string;
+    if (benefitResult.success) {
+      const clauseRef = matchedCov ? ` · ${matchedCov.clauseId}` : '';
+      benefitLine = [
+        `✓ Benefit calculated${clauseRef}`,
+        `  Requested:            $${claim.requestedAmount.toLocaleString()}`,
+        `  Coverage:             ${benefitResult.coveragePercent}%`,
+        `  Deductible applied:   $${benefitResult.deductibleApplied.toLocaleString()}`,
+        `  → Covered amount:     $${benefitResult.coveredAmount.toLocaleString()}`,
+        `  → Patient responsibility: $${benefitResult.patientResponsibility.toLocaleString()}`,
+      ].join('\n');
+    } else {
+      benefitLine = `✗ Benefit calculation failed: ${benefitResult.error}`;
+    }
 
     yield { type: 'tool-complete', toolCall: { ...benefitTc, status: 'completed' }, line: benefitLine, step: 4 };
     yield { type: 'step-result', toolCall: benefitTc, line: benefitLine };
@@ -567,103 +478,102 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
       partial: {
         claimId: claim.claimId,
         sections: {
-          benefitCalculation:
-            benefitResult.success === true
-              ? {
-                  summary: benefitResult.details,
-                  requestedAmount: claim.requestedAmount,
-                  coveredAmount: benefitResult.coveredAmount,
-                  patientResponsibility: benefitResult.patientResponsibility,
-                  deductibleApplied: benefitResult.deductibleApplied,
-                }
-              : {
-                  summary: 'Benefit calculation failed.',
-                  requestedAmount: claim.requestedAmount,
-                  coveredAmount: 0,
-                  patientResponsibility: claim.requestedAmount,
-                  deductibleApplied: 0,
-                },
+          benefitCalculation: benefitResult.success === true
+            ? {
+                summary: benefitResult.details,
+                requestedAmount: claim.requestedAmount,
+                coveredAmount: benefitResult.coveredAmount,
+                patientResponsibility: benefitResult.patientResponsibility,
+                deductibleApplied: benefitResult.deductibleApplied,
+              }
+            : {
+                summary: 'Benefit calculation failed.',
+                requestedAmount: claim.requestedAmount,
+                coveredAmount: 0,
+                patientResponsibility: claim.requestedAmount,
+                deductibleApplied: 0,
+              },
         },
       },
     };
 
-    if (!benefitResult.success) {
-      recommendation = 'REJECTED';
-    }
+    if (!benefitResult.success) recommendation = 'REJECTED';
   }
 
-  // ── Build recommendation reasoning ───────────────────────────────────────────
-  const matchedExcl = policyActive && policy ? policy.exclusions.find((e) => e.claimTypes.includes(claim.claimType)) : undefined;
-  const matchedCov = policyActive && policy ? policy.coverageClauses.find((c) => c.claimType === claim.claimType) : undefined;
+  // ── Build reasoning ────────────────────────────────────────────────────────
+  const bFinal = benefitResult?.success ? benefitResult : null;
 
+  // Short one-liner for the report panel's reasoning.summary
   let reasoningText: string;
   if (recommendation === 'MORE_INFO_REQUIRED') {
-    const ids = docResults
-      .filter(({ result }) => !result.success || !result.valid)
-      .map(({ documentId }) => documentId)
-      .join(', ');
+    const ids = docFindings.filter((f) => f.status !== 'valid').map((f) => f.documentId).join(', ');
     reasoningText = `Document(s) ${ids} are missing or invalid. Valid documentation is required before assessment can proceed.`;
   } else if (recommendation === 'REJECTED') {
     if (!policyActive) {
       reasoningText = `Policy ${claim.policyId} is not active.`;
     } else if (claimTypeExcluded) {
-      const excl = policy?.exclusions.find((e) => e.claimTypes.includes(claim.claimType));
-      reasoningText = excl
-        ? `Claim type "${claim.claimType}" is excluded (${excl.clauseId}): ${excl.description}`
+      reasoningText = matchedExcl
+        ? `Claim type "${claim.claimType}" is excluded under ${matchedExcl.clauseId}: ${matchedExcl.description}`
         : `Claim type "${claim.claimType}" is excluded under this policy.`;
     } else {
       reasoningText = `Medical necessity not established. ${necessityResult.rationale}`;
     }
   } else {
-    const b = benefitResult?.success ? benefitResult : null;
-    reasoningText = b
-      ? `All criteria satisfied. Benefit: $${b.coveredAmount} covered at ${b.coveragePercent}% (deductible $${b.deductibleApplied} applied).`
+    reasoningText = bFinal
+      ? `All criteria satisfied. Covered: $${bFinal.coveredAmount.toLocaleString()} at ${bFinal.coveragePercent}% (deductible $${bFinal.deductibleApplied.toLocaleString()} applied).`
       : 'All criteria met.';
   }
 
-  // Build audit decision mapping
-  const decisionMapping: DecisionFactor[] = [];
+  // ── Audit decision mapping ─────────────────────────────────────────────────
+  const docSummaryList = docFindings
+    .map((f) => `${f.documentId} (${f.documentType.replace(/_/g, ' ')})`)
+    .join(', ');
+  const invalidDocDetail = docFindings
+    .filter((f) => f.status !== 'valid')
+    .map((f) => {
+      const issue = f.issues?.[0] ? ` — ${f.issues[0]}` : '';
+      return `${f.documentId} (${f.documentType.replace(/_/g, ' ')})${issue}`;
+    })
+    .join('; ');
 
-  decisionMapping.push({
-    factor: 'DOCUMENT',
-    status: allDocsValid ? 'PASS' : 'FAIL',
-    clauseId: null,
-    explanation: allDocsValid
-      ? `All ${docResults.length} document(s) verified successfully.`
-      : `Document(s) ${docResults.filter(({ result }) => !result.success || !result.valid).map(({ documentId }) => documentId).join(', ')} are missing or invalid.`,
-  });
-
-  decisionMapping.push({
-    factor: 'POLICY',
-    status: policyActive && !claimTypeExcluded && matchedCov ? 'PASS' : 'FAIL',
-    clauseId: matchedExcl?.clauseId ?? matchedCov?.clauseId ?? null,
-    explanation: !policyActive
-      ? `Policy ${claim.policyId} is not active.`
-      : claimTypeExcluded && matchedExcl
-        ? `Claim type "${claim.claimType}" is excluded under clause ${matchedExcl.clauseId}: ${matchedExcl.description}`
-        : matchedCov
-          ? `Coverage confirmed under clause ${matchedCov.clauseId}.`
-          : `No coverage found for claim type "${claim.claimType}".`,
-  });
-
-  decisionMapping.push({
-    factor: 'MEDICAL',
-    status: necessityResult.necessary ? 'PASS' : 'FAIL',
-    clauseId: null,
-    explanation: necessityResult.necessary
-      ? `Medical necessity confirmed. ${necessityResult.rationale}`
-      : `Medical necessity not established. ${necessityResult.rationale}`,
-  });
-
-  const bFinal = benefitResult?.success ? benefitResult : null;
-  decisionMapping.push({
-    factor: 'BENEFIT',
-    status: bFinal ? 'PASS' : 'FAIL',
-    clauseId: matchedCov?.clauseId ?? null,
-    explanation: bFinal
-      ? `Covered at ${bFinal.coveragePercent}%. Covered amount: $${bFinal.coveredAmount} (deductible $${bFinal.deductibleApplied} applied).`
-      : 'Not applicable — claim was not approved or benefit calculation failed.',
-  });
+  const decisionMapping: DecisionFactor[] = [
+    {
+      factor: 'DOCUMENT',
+      status: allDocsValid ? 'PASS' : 'FAIL',
+      clauseId: null,
+      explanation: allDocsValid
+        ? `All ${health.total} document(s) verified: ${docSummaryList}.`
+        : `${health.invalid + health.missing} of ${health.total} document(s) failed verification. ${invalidDocDetail}.`,
+    },
+    {
+      factor: 'POLICY',
+      status: policyActive && !claimTypeExcluded && matchedCov ? 'PASS' : 'FAIL',
+      clauseId: matchedExcl?.clauseId ?? matchedCov?.clauseId ?? null,
+      explanation: !policyActive
+        ? `Policy ${claim.policyId} (${policy?.holderName ?? 'unknown'}) is not active.`
+        : claimTypeExcluded && matchedExcl
+          ? `Claim type "${claim.claimType}" is excluded under clause ${matchedExcl.clauseId}: ${matchedExcl.description}`
+          : matchedCov
+            ? `Coverage confirmed under ${matchedCov.clauseId}: "${matchedCov.description}"`
+            : `No coverage found for claim type "${claim.claimType}".`,
+    },
+    {
+      factor: 'MEDICAL',
+      status: necessityResult.necessary ? 'PASS' : 'FAIL',
+      clauseId: null,
+      explanation: necessityResult.necessary
+        ? `Medical necessity confirmed for diagnosis "${claim.diagnosis}". ${necessityResult.rationale}${necessityResult.approvedProcedures.length > 0 ? ` Approved CPT codes: ${necessityResult.approvedProcedures.join(', ')}.` : ''}`
+        : `Medical necessity not established for diagnosis "${claim.diagnosis}". ${necessityResult.rationale}`,
+    },
+    {
+      factor: 'BENEFIT',
+      status: bFinal ? 'PASS' : 'FAIL',
+      clauseId: matchedCov?.clauseId ?? null,
+      explanation: bFinal
+        ? `Covered at ${bFinal.coveragePercent}% under ${matchedCov?.clauseId ?? 'policy'}. Covered: $${bFinal.coveredAmount.toLocaleString()} (deductible $${bFinal.deductibleApplied.toLocaleString()} applied; patient responsibility: $${bFinal.patientResponsibility.toLocaleString()}).`
+        : 'Not applicable — claim was not approved.',
+    },
+  ];
 
   const reasoning: ReasoningSection = {
     summary: reasoningText,
@@ -673,9 +583,58 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     }),
   };
 
-  yield { type: 'workflow-complete', recommendation, reasoning: reasoningText };
+  // Rich multi-line narration for the chat window
+  const introText =
+    recommendation === 'APPROVED'
+      ? 'All claim assessment criteria have been satisfied.'
+      : recommendation === 'REJECTED'
+        ? !policyActive
+          ? 'Claim denied. Policy is not active.'
+          : claimTypeExcluded
+            ? 'Claim denied. A policy exclusion applies to this claim type.'
+            : 'Claim denied. Medical necessity has not been established.'
+        : 'Assessment on hold. Required documentation is missing or invalid.';
 
-  // Recommendation section appears in the report when the final assessment text finishes typing.
+  const n1doc = allDocsValid
+    ? `All ${health.total} document(s) verified (${docSummaryList})`
+    : `${health.invalid + health.missing} of ${health.total} document(s) not valid — ${health.invalidIds.join(', ')}`;
+  const n2policy = !policyActive
+    ? `Policy ${claim.policyId} is not active`
+    : claimTypeExcluded && matchedExcl
+      ? `Excluded under ${matchedExcl.clauseId}: "${matchedExcl.description}"`
+      : matchedCov
+        ? `Coverage confirmed — ${matchedCov.clauseId}: "${matchedCov.description}"`
+        : `No coverage for claim type "${claim.claimType}"`;
+  const n3med = necessityResult.necessary
+    ? `Medical necessity confirmed for "${claim.diagnosis}" — ${necessityResult.rationale}`
+    : `Not established for "${claim.diagnosis}" — ${necessityResult.rationale}`;
+  const n4ben = bFinal
+    ? `Covered $${bFinal.coveredAmount.toLocaleString()} at ${bFinal.coveragePercent}% (deductible $${bFinal.deductibleApplied.toLocaleString()} applied; patient responsibility $${bFinal.patientResponsibility.toLocaleString()})`
+    : 'Not applicable';
+
+  const docStatus = allDocsValid ? 'PASS' : 'FAIL';
+  const polStatus = policyActive && !claimTypeExcluded && matchedCov ? 'PASS' : 'FAIL';
+  const medStatus = necessityResult.necessary ? 'PASS' : 'FAIL';
+  const benStatus = bFinal ? 'PASS' : 'N/A ';
+
+  const activeCitation = matchedExcl
+    ? `\nPolicy Citation: ${matchedExcl.clauseId} — "${matchedExcl.description}"`
+    : matchedCov
+      ? `\nPolicy Citation: ${matchedCov.clauseId} — "${matchedCov.description}"`
+      : '';
+
+  const chatNarration = [
+    introText,
+    '',
+    `1. Documents  [${docStatus}] — ${n1doc}`,
+    `2. Policy     [${polStatus}] — ${n2policy}`,
+    `3. Medical    [${medStatus}] — ${n3med}`,
+    `4. Benefit    [${benStatus}] — ${n4ben}`,
+    activeCitation,
+  ].join('\n');
+
+  yield { type: 'workflow-complete', recommendation, reasoning: chatNarration };
+
   yield {
     type: 'report-update',
     step: 0,
@@ -684,17 +643,14 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
       claimId: claim.claimId,
       recommendation,
       sections: {
-        recommendation: {
-          decision: recommendation,
-          reasoning: reasoningText,
-        },
+        recommendation: { decision: recommendation, reasoning: reasoningText },
         decisionMapping,
         reasoning,
       },
     },
   };
 
-  // ── Build the full report ─────────────────────────────────────────────────────
+  // ── Final report ───────────────────────────────────────────────────────────
   const report: AssessmentReport = {
     claimId: claim.claimId,
     patientName: claim.patientName,
@@ -703,8 +659,8 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
     sections: {
       documentReview: {
         summary: allDocsValid
-          ? `All ${docResults.length} document(s) verified successfully.`
-          : `${invalidDocs.length} of ${docResults.length} document(s) failed verification.`,
+          ? `All ${health.total} document(s) verified successfully.`
+          : `${health.invalid + health.missing} of ${health.total} document(s) failed verification.`,
         findings: docFindings,
       },
       policyVerification: {
@@ -715,11 +671,7 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
         holderName: policy?.holderName ?? '',
         status: policy?.status ?? 'not found',
         coverageDetails: policy
-          ? {
-              coverages: policy.coverages,
-              exclusions: policy.exclusions,
-              annualDeductibleMet: policy.annualDeductibleMet,
-            }
+          ? { coverages: policy.coverages, exclusions: policy.exclusions, annualDeductibleMet: policy.annualDeductibleMet }
           : {},
       },
       medicalNecessity: {
@@ -730,29 +682,22 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
         rationale: necessityResult.rationale,
         codes: necessityResult.approvedProcedures,
       },
-      benefitCalculation:
-        benefitResult?.success === true
-          ? {
-              summary: benefitResult.details,
-              requestedAmount: claim.requestedAmount,
-              coveredAmount: benefitResult.coveredAmount,
-              patientResponsibility: benefitResult.patientResponsibility,
-              deductibleApplied: benefitResult.deductibleApplied,
-            }
-          : {
-              summary:
-                recommendation === 'APPROVED'
-                  ? 'Benefit calculation failed.'
-                  : 'Not applicable — claim was not approved.',
-              requestedAmount: claim.requestedAmount,
-              coveredAmount: 0,
-              patientResponsibility: claim.requestedAmount,
-              deductibleApplied: 0,
-            },
-      recommendation: {
-        decision: recommendation,
-        reasoning: reasoningText,
-      },
+      benefitCalculation: bFinal
+        ? {
+            summary: bFinal.details,
+            requestedAmount: claim.requestedAmount,
+            coveredAmount: bFinal.coveredAmount,
+            patientResponsibility: bFinal.patientResponsibility,
+            deductibleApplied: bFinal.deductibleApplied,
+          }
+        : {
+            summary: recommendation === 'APPROVED' ? 'Benefit calculation failed.' : 'Not applicable — claim was not approved.',
+            requestedAmount: claim.requestedAmount,
+            coveredAmount: 0,
+            patientResponsibility: claim.requestedAmount,
+            deductibleApplied: 0,
+          },
+      recommendation: { decision: recommendation, reasoning: reasoningText },
       policyCitations,
       decisionMapping,
       reasoning,
@@ -760,12 +705,11 @@ export async function* streamAssessmentWorkflow(claim: ParsedClaim): AsyncGenera
   };
 
   const bSummary = benefitResult?.success ? benefitResult : null;
-  const summary =
-    recommendation === 'APPROVED'
-      ? `Claim ${claim.claimId} for ${claim.patientName}: APPROVED. Covered: $${bSummary?.coveredAmount ?? 0} (deductible $${bSummary?.deductibleApplied ?? 0} applied). Patient responsibility: $${bSummary?.patientResponsibility ?? claim.requestedAmount}.`
-      : recommendation === 'REJECTED'
-        ? `Claim ${claim.claimId} for ${claim.patientName}: REJECTED. ${reasoningText}`
-        : `Claim ${claim.claimId} for ${claim.patientName}: MORE INFORMATION REQUIRED. ${reasoningText}`;
+  const summary = recommendation === 'APPROVED'
+    ? `Claim ${claim.claimId} for ${claim.patientName}: APPROVED. Covered: $${bSummary?.coveredAmount ?? 0} (deductible $${bSummary?.deductibleApplied ?? 0} applied). Patient responsibility: $${bSummary?.patientResponsibility ?? claim.requestedAmount}.`
+    : recommendation === 'REJECTED'
+      ? `Claim ${claim.claimId} for ${claim.patientName}: REJECTED. ${reasoningText}`
+      : `Claim ${claim.claimId} for ${claim.patientName}: MORE INFORMATION REQUIRED. ${reasoningText}`;
 
-  yield { type: 'final-report', report, toolCalls, summary };
+  yield { type: 'final-report', report, toolCalls: [...manager.toolCalls], summary };
 }

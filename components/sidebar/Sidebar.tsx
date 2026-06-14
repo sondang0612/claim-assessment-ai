@@ -231,22 +231,10 @@ export default function Sidebar({
       <div className="flex-shrink-0 px-3 pt-4 pb-3 space-y-3">
         <div className="flex items-center gap-2 px-1">
           <div className="w-6 h-6 rounded-md bg-blue-500 flex items-center justify-center flex-shrink-0">
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="white"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M9 12h6M12 9v6" />
-              <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-            </svg>
+            <img src="/images/logo.png" alt="logo" />
           </div>
           <span className="text-sm font-semibold text-white leading-none">
-            Claims Assessment AI
+            Claim AI
           </span>
         </div>
 

@@ -479,11 +479,16 @@ export default function ChatContainer() {
                 });
                 break;
 
-              case "workflow-complete":
+              case "workflow-complete": {
+                const label =
+                  event.recommendation === "MORE_INFO_REQUIRED"
+                    ? "MORE INFORMATION REQUIRED"
+                    : event.recommendation;
                 enqueue(
-                  `\n---\n\n## Final Assessment\n\n${event.recommendation}\n${event.reasoning}\n`,
+                  `\n---\n\n## Final Assessment: ${label}\n\n${event.reasoning}\n`,
                 );
                 break;
+              }
 
               case "final-report":
                 scheduleEffect(() => {

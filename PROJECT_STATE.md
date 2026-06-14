@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Audit-Grade Clause Tracing (T23)
+## Status: Complete — Domain Data Orchestration Layer (ClaimDataManager)
 
 ---
 
@@ -95,6 +95,10 @@
   - **Persistence**: conversations saved to `localStorage` on every state change; loaded on mount via lazy `useState` initializer (SSR-safe with `typeof window` guard)
   - **Auto-title**: first 60 chars of user message; upgraded to `"Claim CLM-XXX"` when `workflow-start` fires
   - **Switching**: restores full message/toolCalls/workflowSteps/report state; does not replay animation for past conversations
+- **ClaimDataManager** — Domain Data Orchestration Layer
+  - `lib/domain/ClaimDataManager.ts` — single source of truth for all data access; wraps all 4 tools with memoization; exposes policy/document/medical/benefit method groups; orchestration via `runPrecheck()`, `runEligibilityGate()`, `buildClaimContext()`; exposes `toolCalls` and `trace` for downstream consumers
+  - `lib/workflow/assessmentWorkflow.ts` — refactored: all direct tool + data calls replaced by ClaimDataManager; `record()` + `callIndex` replaced by `manager.peekNextCallId()` / `manager.getLastToolCall()` / `manager.toolCalls`; SSE event sequence, report structure, and all test assertions unchanged
+  - Exported domain types in `ClaimDataManager.ts`: `PrecheckStatus`, `PrecheckResult`, `EligibilityResult`, `DocumentHealthSummary`, `ClaimContext`, `DataAccessLog`
 - **T23** — Audit-grade clause tracing
   - `types/policy.ts` — `clauseId` on `Exclusion`; new `CoverageClause` interface; `coverageClauses[]` on `Policy`
   - `lib/data/policies.ts` — `EX-01` on POL-002 exclusion; `CV-01`–`CV-07` coverage clauses across all policies
