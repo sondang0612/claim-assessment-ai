@@ -83,6 +83,32 @@
 |  |                                                    |  |
 |  |  +- runAssessmentWorkflow(claim) -> WorkflowResult |  |
 |  |     (synchronous; kept for test compatibility)     |  |
+|  |  NOTE: Workflow ONLY calls ClaimDataManager —      |  |
+|  |        no direct lib/data or lib/tools imports     |  |
+|  +------------------------------------------------------+  |
+|                      |                                       |
+|  +------------------------------------------------------+  |
+|  |  Domain Layer  (data orchestration + memoization)   |  |
+|  |  lib/domain/ClaimDataManager.ts                     |  |
+|  |  +- ClaimDataManager(claim: ParsedClaim)            |  |
+|  |  |   Policy:    lookupPolicy(), isPolicyActive(),   |  |
+|  |  |              isClaimTypeExcluded(),              |  |
+|  |  |              getMatchedExclusion(),              |  |
+|  |  |              getMatchedCoverageClause()          |  |
+|  |  |   Documents: verifyDocument(id), verifyDocuments()|  |
+|  |  |              areAllDocsValid(),                  |  |
+|  |  |              getDocumentHealthSummary()          |  |
+|  |  |   Medical:   getMedicalNecessity(),              |  |
+|  |  |              isMedicallyNecessary(),             |  |
+|  |  |              hasUnapprovedProcedures()           |  |
+|  |  |   Benefit:   calculateBenefit()                  |  |
+|  |  |   Orchestration:                                 |  |
+|  |  |     runPrecheck() -> PrecheckResult              |  |
+|  |  |     runEligibilityGate() -> EligibilityResult   |  |
+|  |  |     buildClaimContext() -> ClaimContext          |  |
+|  |  |   Tool mgmt: peekNextCallId(), getLastToolCall() |  |
+|  |  |              toolCalls (readonly), trace log     |  |
+|  |  +- All tool calls memoized (single execution)     |  |
 |  +------------------------------------------------------+  |
 |                      |                                       |
 |  +------------------------------------------------------+  |
@@ -123,6 +149,10 @@
 |  |  |                     ReasoningSection              |  |
 |  |  types/workflow.ts   <- WorkflowToolCall             |  |
 |  |                         WorkflowEvent (11 variants)  |  |
+|  |  lib/domain/         <- Domain orchestration types   |  |
+|  |  ClaimDataManager.ts    PrecheckResult, EligibilityResult|
+|  |                         DocumentHealthSummary        |  |
+|  |                         ClaimContext, DataAccessLog  |  |
 |  +------------------------------------------------------+  |
 +-------------------------------------------------------------+
                       |
@@ -434,9 +464,11 @@ claim-assessment-ai/
 |   |   +-- requestClassifier.ts    # classifyRequest() -- pure regex, no LLM
 |   +-- parser/
 |   |   +-- claimParser.ts          # parseClaim() -- generateText + Zod
+|   +-- domain/
+|   |   +-- ClaimDataManager.ts     # Single source of truth for data access; wraps all tools
 |   +-- workflow/
-|   |   +-- assessmentWorkflow.ts   # streamAssessmentWorkflow() -- async generator (T18)
-|   |                               # runAssessmentWorkflow() -- sync (for tests)
+|   |   +-- assessmentWorkflow.ts   # streamAssessmentWorkflow() + runAssessmentWorkflow()
+|   |                               # Uses ONLY ClaimDataManager (no direct tool calls)
 |   +-- data/
 |   |   +-- policies.ts
 |   |   +-- documents.ts

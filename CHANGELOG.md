@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-06-14 — Domain Data Orchestration Layer (ClaimDataManager)
+
+### Refactor — Single source of truth for all data access in the workflow
+
+**Added**
+- `lib/domain/ClaimDataManager.ts` — new `ClaimDataManager` class; the Workflow Layer now calls ONLY this class for all data access (no direct `lib/data/*` or `lib/tools/*` imports from the workflow)
+  - Policy: `lookupPolicy()`, `getPolicySnapshot()`, `isPolicyActive()`, `isClaimTypeExcluded()`, `getCoverage()`, `getMatchedExclusion()`, `getMatchedCoverageClause()`, `getPolicyClauses()`, `checkExclusions()`
+  - Documents: `verifyDocument()`, `verifyDocuments()`, `hasDocuments()`, `getAllDocuments()`, `areAllDocsValid()`, `getMissingDocuments()`, `getDocumentHealthSummary()`
+  - Medical: `getMedicalNecessity()`, `isMedicallyNecessary()`, `hasUnapprovedProcedures()`, `getApprovedProcedures()`
+  - Benefit: `calculateBenefit()`
+  - Orchestration: `runPrecheck()` → `PrecheckResult { status, blockedStep, reasons, confidence }`, `runEligibilityGate()` → `EligibilityResult { eligible, reasons, riskFlags }`, `buildClaimContext()` → full snapshot
+  - All tool calls memoized — repeated calls return cached result; no double-recording
+  - Tool call management: `peekNextCallId()`, `getLastToolCall()`, readonly `toolCalls` accessor
+  - Internal data access trace log (`DataAccessLog[]`) for future observability tooling
+- Exported domain types: `PrecheckStatus`, `PrecheckResult`, `EligibilityResult`, `DocumentHealthSummary`, `ClaimContext`, `DataAccessLog`
+
+**Changed**
+- `lib/workflow/assessmentWorkflow.ts` — both `runAssessmentWorkflow` and `streamAssessmentWorkflow` refactored: all tool calls and data reads replaced by `ClaimDataManager` method calls; `toolCalls` array + `record()` + `callIndex` removed; SSE event sequence and report structure unchanged (backward compatible)
+
+**Architecture invariant enforced**
+- Workflow Layer imports: only `ClaimDataManager` (for runtime calls) + type-only imports from `types/` and `lib/domain/ClaimDataManager`
+- Zero direct calls to `lib/tools/*` or `lib/data/*` from the workflow
+
+**Tests**
+- All 122 existing tests pass unchanged
+- TypeScript strict: 0 errors
+
+---
+
 ## 2026-06-14 — Audit-Grade Clause Tracing (T23)
 
 ### Feature — Every policy decision traceable to a clauseId
