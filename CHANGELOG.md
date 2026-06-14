@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-06-14 — Modal-Based Claim Review Dashboard (T22)
+
+### Feature — Replace toggle expansion with modal-based detail view
+
+**Problems solved:**
+- Toggle expand/collapse caused unstable UI state requiring page refresh
+- Long lists of expanded cards became unscrollable
+- History list and detail view were visually coupled (poor scalability)
+
+**Chosen pattern: Option A — Modal View**
+Clicking any claim row opens a centered modal with the full `AssessmentReportView`. The history navigation list remains permanently visible in the right panel. Modal supports Prev/Next navigation (keyboard `←→`), close via ✕ button, click-outside, or `Esc` key.
+
+**Added / Changed**
+- `components/report/MultiClaimReportPanel.tsx` — complete UX redesign:
+  - **History navigation panel** (permanent, always visible):
+    - Compact clickable rows (no expand/collapse)
+    - Each row: `claimId · Live (if streaming) · HH:MM:SS · StatusChip`
+    - Selected row highlighted in blue
+    - "Click a claim to view the full report" hint when nothing selected
+    - `HistoryRow` extracted as `memo`-wrapped sub-component — opening modal only re-renders the two rows whose `isSelected` changed, not the whole list
+    - Stable `handleSelect = useCallback(fn, [])` passed to every row — no closure recreation on parent re-renders
+  - **Detail modal** (opens on click):
+    - `fixed inset-0 z-50` overlay with `backdrop-blur-sm`
+    - `max-w-2xl max-h-[85vh]` panel, scrollable body
+    - Header: claimId · timestamp · Live badge · Prev/Next counter (e.g. `2/4`) · Close
+    - `← / →` chevron buttons for navigating chronologically through all events (older/newer)
+    - Buttons disabled at bounds (`disabled:opacity-30`)
+    - `Esc` key closes via `window.addEventListener('keydown')` in `useEffect` (listener in callback, not setState-in-body — no ESLint violation)
+  - **Auto-open on streaming**: `useState(activeEventId)` initializes the modal to the live event; `key={streamingEventId ?? 'idle'}` in parent causes remount at each streaming boundary, resetting to the correct initial state with no `useEffect`+setState anti-pattern
+  - **No toggles**: removed all expand/collapse state and logic
+
+**Preserved**
+- All 122 tests pass unchanged
+- Event-sourced `ClaimEvent[]` model unchanged
+- `streamingEventId` + `streamingEventIdRef` in `ChatContainer` unchanged
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing
+- `npx eslint components/ types/` — 0 errors (2 pre-existing warnings in ChatInput.tsx)
+
+---
+
 ## 2026-06-14 — Event-Sourced Multi-Claim Dashboard (T21 v2)
 
 ### Feature — Event-sourced claim history with timestamp tracking and toggle fix

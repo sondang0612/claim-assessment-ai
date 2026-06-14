@@ -7,7 +7,9 @@ import ReportSection from "./ReportSection";
 function Pending({ label }: { label: string }) {
   return (
     <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-      <p className="text-xs italic text-gray-400 animate-pulse">{label} — Pending…</p>
+      <p className="text-xs italic text-gray-400 animate-pulse">
+        {label} — Pending…
+      </p>
     </div>
   );
 }
@@ -151,12 +153,12 @@ export default function AssessmentReportView({
                     typeof code === "string"
                       ? code
                       : typeof code === "object" && code !== null
-                      ? String(
-                          (code as Record<string, unknown>).code ??
-                            (code as Record<string, unknown>).name ??
-                            JSON.stringify(code)
-                        )
-                      : String(code);
+                        ? String(
+                            (code as Record<string, unknown>).code ??
+                              (code as Record<string, unknown>).name ??
+                              JSON.stringify(code),
+                          )
+                        : String(code);
                   return (
                     <span
                       key={i}
@@ -226,7 +228,7 @@ export default function AssessmentReportView({
 
         {/* Policy Citations */}
         {sections.policyCitations && sections.policyCitations.length > 0 && (
-          <ReportSection title="Policy Citations" icon="📎" defaultOpen={false}>
+          <ReportSection title="Policy Citations" icon="📎" defaultOpen={true}>
             <div className="space-y-2">
               {sections.policyCitations.map((citation, i) => (
                 <div key={i} className="border-l-2 border-blue-200 pl-3">

@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Event-Sourced Multi-Claim Assessment Dashboard
+## Status: Complete — Modal-Based Claim Review Dashboard
 
 ---
 
@@ -95,6 +95,8 @@
   - **Persistence**: conversations saved to `localStorage` on every state change; loaded on mount via lazy `useState` initializer (SSR-safe with `typeof window` guard)
   - **Auto-title**: first 60 chars of user message; upgraded to `"Claim CLM-XXX"` when `workflow-start` fires
   - **Switching**: restores full message/toolCalls/workflowSteps/report state; does not replay animation for past conversations
+- **T22** — Modal-based claim review dashboard
+  - `components/report/MultiClaimReportPanel.tsx` — toggle expansion removed; replaced with clickable history list + modal detail view; `HistoryRow` memoized to prevent full-list re-render on selection change; `handleSelect = useCallback` for stable prop; modal has Prev/Next navigation, ESC-to-close, click-outside-to-close, Live badge for streaming event
 - **T21 v2** — Event-sourced multi-claim assessment dashboard
   - `types/report.ts` — new `ClaimEvent { eventId, claimId, timestamp, report }` interface
   - `types/conversation.ts` — `claimEvents: ClaimEvent[]` (append-only log; same claimId allowed multiple times)

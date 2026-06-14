@@ -32,7 +32,8 @@ const STORAGE_KEY = "claim-assessment-conversations-v3";
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateId(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+  return typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -59,7 +60,8 @@ interface ScheduledEffect {
 
 export default function ChatContainer() {
   // ── Conversation history ─────────────────────────────────────────────────
-  const [conversations, setConversations] = useState<Conversation[]>(loadConversations);
+  const [conversations, setConversations] =
+    useState<Conversation[]>(loadConversations);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -91,7 +93,12 @@ export default function ChatContainer() {
   const streamingEventIdRef = useRef<string | null>(null);
 
   // ── Snapshot ref (latest state for saving without stale closures) ─────────
-  const snapshotRef = useRef({ messages, toolCalls, workflowSteps, claimEvents });
+  const snapshotRef = useRef({
+    messages,
+    toolCalls,
+    workflowSteps,
+    claimEvents,
+  });
   const prevIsStreamingRef = useRef(false);
 
   useEffect(() => {
@@ -113,7 +120,12 @@ export default function ChatContainer() {
     prevIsStreamingRef.current = isStreaming;
 
     if (wasPrevStreaming && !isStreaming && activeConvId) {
-      const { messages: msgs, toolCalls: tcs, workflowSteps: wfs, claimEvents: evts } = snapshotRef.current;
+      const {
+        messages: msgs,
+        toolCalls: tcs,
+        workflowSteps: wfs,
+        claimEvents: evts,
+      } = snapshotRef.current;
       if (msgs.length > 0) {
         setConversations((prev) =>
           prev.map((c) =>
@@ -126,8 +138,8 @@ export default function ChatContainer() {
                   claimEvents: evts,
                   updatedAt: new Date().toISOString(),
                 }
-              : c
-          )
+              : c,
+          ),
         );
       }
     }
@@ -159,9 +171,9 @@ export default function ChatContainer() {
       setToolCalls(conv.toolCalls as ToolCallEntry[]);
       setWorkflowSteps(conv.workflowSteps as WorkflowStepEntry[]);
       setClaimEvents(conv.claimEvents ?? []);
-      setStreamingEventId(null);
+      //setStreamingEventId(null);
     },
-    [isStreaming, activeConvId, conversations]
+    [isStreaming, activeConvId, conversations],
   );
 
   // ── Start a fresh conversation ────────────────────────────────────────────
@@ -173,7 +185,7 @@ export default function ChatContainer() {
     setToolCalls([]);
     setWorkflowSteps([]);
     setClaimEvents([]);
-    setStreamingEventId(null);
+    //setStreamingEventId(null);
   }, [isStreaming]);
 
   // ── Delete a conversation ─────────────────────────────────────────────────
@@ -182,13 +194,13 @@ export default function ChatContainer() {
       if (id === activeConvId) newAssessment();
       setConversations((prev) => prev.filter((c) => c.id !== id));
     },
-    [activeConvId, newAssessment]
+    [activeConvId, newAssessment],
   );
 
   // ── Rename a conversation ────────────────────────────────────────────────
   const renameConversation = useCallback((id: string, title: string) => {
     setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, title } : c))
+      prev.map((c) => (c.id === id ? { ...c, title } : c)),
     );
   }, []);
 
@@ -200,10 +212,20 @@ export default function ChatContainer() {
       // Create or reuse active conversation
       const convId = activeConvId ?? generateId();
       if (!activeConvId) {
-        const title = content.length > 60 ? content.slice(0, 57) + "…" : content;
+        const title =
+          content.length > 60 ? content.slice(0, 57) + "…" : content;
         const now = new Date().toISOString();
         setConversations((prev) => [
-          { id: convId, title, messages: [], toolCalls: [], workflowSteps: [], claimEvents: [], createdAt: now, updatedAt: now },
+          {
+            id: convId,
+            title,
+            messages: [],
+            toolCalls: [],
+            workflowSteps: [],
+            claimEvents: [],
+            createdAt: now,
+            updatedAt: now,
+          },
           ...prev,
         ]);
         setActiveConvId(convId);
@@ -223,7 +245,7 @@ export default function ChatContainer() {
       setMessages([...nextMessages, { role: "assistant", content: "" }]);
       setToolCalls([]);
       setWorkflowSteps([]);
-      setStreamingEventId(null);
+      //setStreamingEventId(null);
       setIsStreaming(true);
 
       const controller = new AbortController();
@@ -242,7 +264,7 @@ export default function ChatContainer() {
           typingActiveRef.current = false;
           rafIdRef.current = null;
           if (sseComplete) {
-            setStreamingEventId(null);
+            //setStreamingEventId(null);
             setIsStreaming(false);
           }
           return;
@@ -255,11 +277,11 @@ export default function ChatContainer() {
         const revealedPos = displayedRef.current.length;
         if (scheduledEffectsRef.current.length > 0) {
           const due = scheduledEffectsRef.current.filter(
-            (e) => e.fireAtPos <= revealedPos
+            (e) => e.fireAtPos <= revealedPos,
           );
           if (due.length > 0) {
             scheduledEffectsRef.current = scheduledEffectsRef.current.filter(
-              (e) => e.fireAtPos > revealedPos
+              (e) => e.fireAtPos > revealedPos,
             );
             for (const e of due) e.effect();
           }
@@ -317,7 +339,9 @@ export default function ChatContainer() {
           try {
             const errData = (await res.json()) as { error?: string };
             errorMsg = errData.error ?? errorMsg;
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
           throw new Error(errorMsg);
         }
 
@@ -336,7 +360,9 @@ export default function ChatContainer() {
           buffer = parts.pop() ?? "";
 
           for (const sseChunk of parts) {
-            const dataLine = sseChunk.split("\n").find((l) => l.startsWith("data: "));
+            const dataLine = sseChunk
+              .split("\n")
+              .find((l) => l.startsWith("data: "));
             if (!dataLine) continue;
 
             const event = JSON.parse(dataLine.slice(6)) as WorkflowEvent;
@@ -355,13 +381,17 @@ export default function ChatContainer() {
                   report: { claimId: event.claimId, sections: {} },
                 };
                 setClaimEvents((prev) => [...prev, newEvent]);
-                setStreamingEventId(eventId);
+                //setStreamingEventId(eventId);
                 setConversations((prev) =>
                   prev.map((c) =>
                     c.id === convId
-                      ? { ...c, title: `Claim ${event.claimId}`, updatedAt: new Date().toISOString() }
-                      : c
-                  )
+                      ? {
+                          ...c,
+                          title: `Claim ${event.claimId}`,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : c,
+                  ),
                 );
                 enqueue(`Assessment started for claim ${event.claimId}.\n`);
                 break;
@@ -373,7 +403,7 @@ export default function ChatContainer() {
                   setWorkflowSteps((prev) => {
                     if (prev.some((s) => s.step === step)) {
                       return prev.map((s) =>
-                        s.step === step ? { ...s, status: "running" } : s
+                        s.step === step ? { ...s, status: "running" } : s,
                       );
                     }
                     return [...prev, { step, stepName, status: "running" }];
@@ -400,9 +430,13 @@ export default function ChatContainer() {
                   setToolCalls((prev) =>
                     prev.map((tc) =>
                       tc.toolCallId === event.toolCall.toolCallId
-                        ? { ...tc, output: event.toolCall.output, status: "completed" }
-                        : tc
-                    )
+                        ? {
+                            ...tc,
+                            output: event.toolCall.output,
+                            status: "completed",
+                          }
+                        : tc,
+                    ),
                   );
                 });
                 break;
@@ -415,8 +449,8 @@ export default function ChatContainer() {
                 scheduleEffect(() => {
                   setWorkflowSteps((prev) =>
                     prev.map((s) =>
-                      s.step === event.step ? { ...s, status: "completed" } : s
-                    )
+                      s.step === event.step ? { ...s, status: "completed" } : s,
+                    ),
                   );
                 });
                 break;
@@ -434,17 +468,20 @@ export default function ChatContainer() {
                         report: {
                           ...existing,
                           ...event.partial,
-                          sections: { ...existing.sections, ...event.partial.sections },
+                          sections: {
+                            ...existing.sections,
+                            ...event.partial.sections,
+                          },
                         },
                       };
-                    })
+                    }),
                   );
                 });
                 break;
 
               case "workflow-complete":
                 enqueue(
-                  `\n---\n\n## Final Assessment\n\n${event.recommendation}\n${event.reasoning}\n`
+                  `\n---\n\n## Final Assessment\n\n${event.recommendation}\n${event.reasoning}\n`,
                 );
                 break;
 
@@ -455,16 +492,19 @@ export default function ChatContainer() {
                   setClaimEvents((prev) =>
                     prev.map((ev) =>
                       ev.eventId === currentEventId
-                        ? { ...ev, report: event.report as PartialAssessmentReport }
-                        : ev
-                    )
+                        ? {
+                            ...ev,
+                            report: event.report as PartialAssessmentReport,
+                          }
+                        : ev,
+                    ),
                   );
                 });
                 break;
 
               case "error":
                 enqueue(
-                  `\n\nError: ${event.message}\n\nCheck that DEEPSEEK_API_KEY is set in .env.local.`
+                  `\n\nError: ${event.message}\n\nCheck that DEEPSEEK_API_KEY is set in .env.local.`,
                 );
                 break;
             }
@@ -478,7 +518,7 @@ export default function ChatContainer() {
             scheduledEffectsRef.current = [];
             for (const e of remaining) e.effect();
           }
-          setStreamingEventId(null);
+          //setStreamingEventId(null);
           setIsStreaming(false);
         }
       } catch (err) {
@@ -486,16 +526,16 @@ export default function ChatContainer() {
           cancelTyping("Assessment cancelled.");
         } else {
           cancelTyping(
-            "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again."
+            "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.",
           );
         }
-        setStreamingEventId(null);
+        //setStreamingEventId(null);
         setIsStreaming(false);
       } finally {
         abortRef.current = null;
       }
     },
-    [messages, model, isStreaming, activeConvId]
+    [messages, model, isStreaming, activeConvId],
   );
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -566,10 +606,19 @@ export default function ChatContainer() {
               onClick={() => setSidebarOpen((v) => !v)}
               className="flex-shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="3" y1="6" x2="21" y2="6"/>
-                <line x1="3" y1="12" x2="21" y2="12"/>
-                <line x1="3" y1="18" x2="21" y2="18"/>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
               </svg>
             </button>
 
@@ -577,7 +626,8 @@ export default function ChatContainer() {
             <div className="flex-1 min-w-0">
               <h1 className="text-sm font-semibold text-gray-900 truncate">
                 {activeConvId
-                  ? (conversations.find((c) => c.id === activeConvId)?.title ?? "Assessment")
+                  ? (conversations.find((c) => c.id === activeConvId)?.title ??
+                    "Assessment")
                   : "Claim Assessment AI"}
               </h1>
             </div>
@@ -595,7 +645,9 @@ export default function ChatContainer() {
           <MessageList messages={messages} isStreaming={isStreaming} />
 
           {/* Workflow step timeline */}
-          {workflowSteps.length > 0 && <WorkflowTimeline steps={workflowSteps} />}
+          {workflowSteps.length > 0 && (
+            <WorkflowTimeline steps={workflowSteps} />
+          )}
 
           {/* Tool call log */}
           {toolCalls.length > 0 && <ToolCallLog toolCalls={toolCalls} />}
@@ -624,7 +676,9 @@ export default function ChatContainer() {
                 <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
                   <span className="text-gray-400 text-xl">📊</span>
                 </div>
-                <p className="text-sm text-gray-400 font-medium">No report yet</p>
+                <p className="text-sm text-gray-400 font-medium">
+                  No report yet
+                </p>
                 <p className="text-xs text-gray-300 mt-1">
                   Submit a claim assessment to see the structured report here.
                 </p>
