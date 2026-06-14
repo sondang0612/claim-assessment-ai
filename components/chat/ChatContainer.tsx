@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import type { PartialAssessmentReport } from "@/types/report";
+import type { PartialAssessmentReport, ClaimEvent } from "@/types/report";
 import type { WorkflowEvent } from "@/types/workflow";
 import type { Conversation } from "@/types/conversation";
 import type { ToolCallEntry } from "./ToolCallLog";
@@ -10,7 +10,7 @@ import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
 import ToolCallLog from "./ToolCallLog";
 import WorkflowTimeline from "./WorkflowTimeline";
-import AssessmentReportView from "../report/AssessmentReport";
+import MultiClaimReportPanel from "../report/MultiClaimReportPanel";
 import Sidebar from "../sidebar/Sidebar";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ interface Message {
 /** Characters revealed per animation frame (~60 fps → ~300 chars/sec). */
 const CHARS_PER_FRAME = 5;
 
-const STORAGE_KEY = "claim-assessment-conversations-v1";
+const STORAGE_KEY = "claim-assessment-conversations-v3";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +67,10 @@ export default function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepEntry[]>([]);
-  const [report, setReport] = useState<PartialAssessmentReport | null>(null);
+  // Append-only event log; same claimId can appear multiple times
+  const [claimEvents, setClaimEvents] = useState<ClaimEvent[]>([]);
+  // The eventId currently streaming (null between runs); drives panel expansion
+  const [streamingEventId, setStreamingEventId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [model, setModel] = useState<DeepSeekModel>("deepseek-chat");
 
@@ -84,14 +87,15 @@ export default function ChatContainer() {
   const scheduledEffectsRef = useRef<ScheduledEffect[]>([]);
   const totalEnqueuedRef = useRef(0);
 
+  // ── Per-message event ID (stable across the SSE closure) ─────────────────
+  const streamingEventIdRef = useRef<string | null>(null);
+
   // ── Snapshot ref (latest state for saving without stale closures) ─────────
-  // Updated after every render via a no-dep effect so the streaming-complete
-  // effect always reads the final values without triggering extra re-runs.
-  const snapshotRef = useRef({ messages, toolCalls, workflowSteps, report });
+  const snapshotRef = useRef({ messages, toolCalls, workflowSteps, claimEvents });
   const prevIsStreamingRef = useRef(false);
 
   useEffect(() => {
-    snapshotRef.current = { messages, toolCalls, workflowSteps, report };
+    snapshotRef.current = { messages, toolCalls, workflowSteps, claimEvents };
   });
 
   // ── Persist conversations to localStorage ─────────────────────────────────
@@ -104,14 +108,12 @@ export default function ChatContainer() {
   }, [conversations]);
 
   // ── Save completed conversation state when streaming finishes ─────────────
-  // Uses snapshotRef (updated after every render by the no-dep effect above)
-  // so we always get the final state without adding volatile state to deps.
   useEffect(() => {
     const wasPrevStreaming = prevIsStreamingRef.current;
     prevIsStreamingRef.current = isStreaming;
 
     if (wasPrevStreaming && !isStreaming && activeConvId) {
-      const { messages: msgs, toolCalls: tcs, workflowSteps: wfs, report: rpt } = snapshotRef.current;
+      const { messages: msgs, toolCalls: tcs, workflowSteps: wfs, claimEvents: evts } = snapshotRef.current;
       if (msgs.length > 0) {
         setConversations((prev) =>
           prev.map((c) =>
@@ -121,7 +123,7 @@ export default function ChatContainer() {
                   messages: msgs,
                   toolCalls: tcs,
                   workflowSteps: wfs,
-                  report: rpt,
+                  claimEvents: evts,
                   updatedAt: new Date().toISOString(),
                 }
               : c
@@ -156,7 +158,8 @@ export default function ChatContainer() {
       setMessages(conv.messages as Message[]);
       setToolCalls(conv.toolCalls as ToolCallEntry[]);
       setWorkflowSteps(conv.workflowSteps as WorkflowStepEntry[]);
-      setReport(conv.report);
+      setClaimEvents(conv.claimEvents ?? []);
+      setStreamingEventId(null);
     },
     [isStreaming, activeConvId, conversations]
   );
@@ -169,7 +172,8 @@ export default function ChatContainer() {
     setMessages([]);
     setToolCalls([]);
     setWorkflowSteps([]);
-    setReport(null);
+    setClaimEvents([]);
+    setStreamingEventId(null);
   }, [isStreaming]);
 
   // ── Delete a conversation ─────────────────────────────────────────────────
@@ -199,7 +203,7 @@ export default function ChatContainer() {
         const title = content.length > 60 ? content.slice(0, 57) + "…" : content;
         const now = new Date().toISOString();
         setConversations((prev) => [
-          { id: convId, title, messages: [], toolCalls: [], workflowSteps: [], report: null, createdAt: now, updatedAt: now },
+          { id: convId, title, messages: [], toolCalls: [], workflowSteps: [], claimEvents: [], createdAt: now, updatedAt: now },
           ...prev,
         ]);
         setActiveConvId(convId);
@@ -208,6 +212,10 @@ export default function ChatContainer() {
       // ── Reset animation state ──────────────────────────────────────────
       clearAnimation();
 
+      // Generate a unique ID for THIS assessment run — stable across the SSE closure.
+      const eventId = generateId();
+      streamingEventIdRef.current = eventId;
+
       const userMsg: Message = { role: "user", content };
       const nextMessages = [...messages, userMsg];
       baseMessagesRef.current = nextMessages;
@@ -215,7 +223,7 @@ export default function ChatContainer() {
       setMessages([...nextMessages, { role: "assistant", content: "" }]);
       setToolCalls([]);
       setWorkflowSteps([]);
-      setReport(null);
+      setStreamingEventId(null);
       setIsStreaming(true);
 
       const controller = new AbortController();
@@ -233,7 +241,10 @@ export default function ChatContainer() {
           }
           typingActiveRef.current = false;
           rafIdRef.current = null;
-          if (sseComplete) setIsStreaming(false);
+          if (sseComplete) {
+            setStreamingEventId(null);
+            setIsStreaming(false);
+          }
           return;
         }
 
@@ -335,8 +346,16 @@ export default function ChatContainer() {
                 enqueue(event.summary);
                 break;
 
-              case "workflow-start":
-                // Update conversation title with claim ID once we know it.
+              case "workflow-start": {
+                // Create the event entry immediately — both state updates batch together.
+                const newEvent: ClaimEvent = {
+                  eventId,
+                  claimId: event.claimId,
+                  timestamp: new Date().toISOString(),
+                  report: { claimId: event.claimId, sections: {} },
+                };
+                setClaimEvents((prev) => [...prev, newEvent]);
+                setStreamingEventId(eventId);
                 setConversations((prev) =>
                   prev.map((c) =>
                     c.id === convId
@@ -346,6 +365,7 @@ export default function ChatContainer() {
                 );
                 enqueue(`Assessment started for claim ${event.claimId}.\n`);
                 break;
+              }
 
               case "step-start":
                 scheduleEffect(() => {
@@ -403,14 +423,22 @@ export default function ChatContainer() {
 
               case "report-update":
                 scheduleEffect(() => {
-                  setReport((prev) => {
-                    if (!prev) return event.partial;
-                    return {
-                      ...prev,
-                      ...event.partial,
-                      sections: { ...prev.sections, ...event.partial.sections },
-                    };
-                  });
+                  const currentEventId = streamingEventIdRef.current;
+                  if (!currentEventId) return;
+                  setClaimEvents((prev) =>
+                    prev.map((ev) => {
+                      if (ev.eventId !== currentEventId) return ev;
+                      const existing = ev.report;
+                      return {
+                        ...ev,
+                        report: {
+                          ...existing,
+                          ...event.partial,
+                          sections: { ...existing.sections, ...event.partial.sections },
+                        },
+                      };
+                    })
+                  );
                 });
                 break;
 
@@ -421,9 +449,17 @@ export default function ChatContainer() {
                 break;
 
               case "final-report":
-                scheduleEffect(() =>
-                  setReport(event.report as PartialAssessmentReport)
-                );
+                scheduleEffect(() => {
+                  const currentEventId = streamingEventIdRef.current;
+                  if (!currentEventId) return;
+                  setClaimEvents((prev) =>
+                    prev.map((ev) =>
+                      ev.eventId === currentEventId
+                        ? { ...ev, report: event.report as PartialAssessmentReport }
+                        : ev
+                    )
+                  );
+                });
                 break;
 
               case "error":
@@ -442,6 +478,7 @@ export default function ChatContainer() {
             scheduledEffectsRef.current = [];
             for (const e of remaining) e.effect();
           }
+          setStreamingEventId(null);
           setIsStreaming(false);
         }
       } catch (err) {
@@ -452,6 +489,7 @@ export default function ChatContainer() {
             "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again."
           );
         }
+        setStreamingEventId(null);
         setIsStreaming(false);
       } finally {
         abortRef.current = null;
@@ -477,7 +515,6 @@ export default function ChatContainer() {
             isStreaming={isStreaming}
             onSelect={(id) => {
               selectConversation(id);
-              // Close sidebar on small desktops after selecting
             }}
             onNew={newAssessment}
             onRename={renameConversation}
@@ -575,8 +612,12 @@ export default function ChatContainer() {
 
         {/* ── Report panel — persists across conversation switches ── */}
         <div className="w-80 xl:w-[420px] flex flex-col bg-gray-50 overflow-y-auto flex-shrink-0 border-l border-gray-100">
-          {report ? (
-            <AssessmentReportView report={report} />
+          {claimEvents.length > 0 ? (
+            <MultiClaimReportPanel
+              key={streamingEventId ?? "idle"}
+              claimEvents={claimEvents}
+              activeEventId={streamingEventId}
+            />
           ) : (
             <div className="flex-1 flex items-center justify-center p-8 text-center">
               <div>

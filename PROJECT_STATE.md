@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — ChatGPT-style Conversation Sidebar + Synchronized Progressive Rendering
+## Status: Complete — Event-Sourced Multi-Claim Assessment Dashboard
 
 ---
 
@@ -95,6 +95,11 @@
   - **Persistence**: conversations saved to `localStorage` on every state change; loaded on mount via lazy `useState` initializer (SSR-safe with `typeof window` guard)
   - **Auto-title**: first 60 chars of user message; upgraded to `"Claim CLM-XXX"` when `workflow-start` fires
   - **Switching**: restores full message/toolCalls/workflowSteps/report state; does not replay animation for past conversations
+- **T21 v2** — Event-sourced multi-claim assessment dashboard
+  - `types/report.ts` — new `ClaimEvent { eventId, claimId, timestamp, report }` interface
+  - `types/conversation.ts` — `claimEvents: ClaimEvent[]` (append-only log; same claimId allowed multiple times)
+  - `components/report/MultiClaimReportPanel.tsx` — Claim History (chronological with timestamps) + newest-first collapsible event cards; `expandedId = activeEventId ?? manualExpandedId`; `key` prop resets expansion on streaming start/end
+  - `components/chat/ChatContainer.tsx` — `claimEvents[]` state + `streamingEventId` + `streamingEventIdRef`; eventId generated per `sendMessage`; `report-update`/`final-report` routed by eventId not claimId; `setStreamingEventId(null)` at all streaming-end paths (toggle bug fix); storage key v3
 - **T19** — Synchronized side-effect queue (UX race condition fix)
   - Root cause: SSE events arrived at network speed while narration typed at ~300 chars/sec; tool panels and full report appeared before the corresponding text was visible
   - Fix: `scheduledEffectsRef` (list of `{ fireAtPos, effect }`) + `totalEnqueuedRef` (cumulative chars ever enqueued)

@@ -18,6 +18,8 @@
 |  |  |   +- ChatInput.tsx         (text input + send)    |  |
 |  |  |   +- WorkflowTimeline.tsx  (step progress strip)  |  |
 |  |  |   +- ToolCallLog.tsx       (live tool call panel) |  |
+|  |  +- components/report/MultiClaimReportPanel.tsx      |  |
+|  |  |   (history summary + per-claim collapsible cards) |  |
 |  |  +- components/report/AssessmentReport.tsx           |  |
 |  |      +- ReportSection.tsx     (collapsible section)  |  |
 |  |      +- RecommendationBadge.tsx (APPROVED/...)       |  |
@@ -417,6 +419,7 @@ claim-assessment-ai/
 |   |   +-- WorkflowTimeline.tsx    # Horizontal step tracker (pending/running/done/failed)
 |   |   +-- ToolCallLog.tsx         # Live tool call panel (running->completed states)
 |   +-- report/
+|       +-- MultiClaimReportPanel.tsx # Claim History + per-claim expandable reports (T21)
 |       +-- AssessmentReport.tsx    # Progressive 6-section report (accepts PartialAssessmentReport)
 |       +-- ReportSection.tsx       # Individual collapsible section
 |       +-- RecommendationBadge.tsx # APPROVED | REJECTED | MORE INFO badge

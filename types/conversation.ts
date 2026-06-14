@@ -1,4 +1,4 @@
-import type { PartialAssessmentReport } from './report';
+import type { ClaimEvent } from './report';
 
 export interface Conversation {
   id: string;
@@ -16,7 +16,8 @@ export interface Conversation {
     stepName: string;
     status: 'pending' | 'running' | 'completed' | 'failed';
   }>;
-  report: PartialAssessmentReport | null;
+  /** Append-only log of every assessment run; same claimId may appear multiple times. */
+  claimEvents: ClaimEvent[];
   createdAt: string;
   updatedAt: string;
 }

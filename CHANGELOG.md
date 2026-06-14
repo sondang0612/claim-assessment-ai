@@ -1,5 +1,101 @@
 # Changelog
 
+## 2026-06-14 — Event-Sourced Multi-Claim Dashboard (T21 v2)
+
+### Feature — Event-sourced claim history with timestamp tracking and toggle fix
+
+**Problems solved:**
+
+1. **Toggle bug** — `streamingEventId` was never cleared after streaming ended, so `expandedId = activeEventId ?? manualExpandedId` kept resolving to the stale active ID. All toggle clicks were no-ops until page refresh.
+
+2. **Duplicate claimId overwrite** — previous `Record<string, PartialAssessmentReport>` model overwrote the first CLM-002 if CLM-002 was submitted again.
+
+3. **No timestamps** — history had no temporal context.
+
+**Solution — Append-only `ClaimEvent[]` log:**
+Each assessment run generates a client-side `eventId` (UUID) before the SSE call starts. The `eventId` is stored in `streamingEventIdRef` (stable across the async SSE closure). On `workflow-start`, a new `ClaimEvent` is appended to the array and `streamingEventId` state is set. On `report-update`/`final-report`, only the entry matching `streamingEventIdRef.current` is mutated — all other events untouched. When streaming ends, `streamingEventId` is explicitly cleared at every `setIsStreaming(false)` callsite (tick end, SSE close, catch blocks).
+
+**Toggle fix:** `expandedId = activeEventId ?? manualExpandedId`. Once `activeEventId` becomes null, `manualExpandedId` controls expansion. A `key={streamingEventId ?? 'idle'}` prop on `MultiClaimReportPanel` remounts the component when each streaming cycle starts/ends, resetting `manualExpandedId` to the last event (so the completed report is always shown expanded by default).
+
+**Added**
+- `types/report.ts` — `ClaimEvent { eventId, claimId, timestamp, report }` interface
+
+**Changed**
+- `types/conversation.ts` — `claimReports: Record<string, PartialAssessmentReport>` → `claimEvents: ClaimEvent[]`
+- `types/report.ts` — `ClaimEvent` interface added (see above)
+- `components/report/MultiClaimReportPanel.tsx` — rewritten for event model:
+  - Props: `claimEvents: ClaimEvent[]`, `activeEventId: string | null`
+  - **Claim History** section: chronological event log with `HH:MM:SS` timestamp, claimId, status badge
+  - **Event cards**: newest-first collapsible; `expandedId = activeEventId ?? manualExpandedId`; live event locked open; past events user-toggleable
+  - `formatTime()` helper for ISO → `HH:MM:SS`
+  - No `useEffect`+setState; toggle derived from props (no ESLint violations)
+- `components/chat/ChatContainer.tsx` — complete rewrite of state model:
+  - `claimReports` state → `claimEvents: ClaimEvent[]`
+  - `streamingClaimId` state → `streamingEventId: string | null`
+  - Added `streamingEventIdRef: React.MutableRefObject<string | null>` — stable reference for SSE closure
+  - `sendMessage`: generates `eventId = generateId()` before SSE; stores in `streamingEventIdRef.current`
+  - `workflow-start` handler: directly calls `setClaimEvents(prev => [...prev, newEvent])` + `setStreamingEventId(eventId)` (no scheduleEffect — immediate so panel expands without delay)
+  - `report-update` handler: `setClaimEvents(prev => prev.map(ev => ev.eventId !== currentEventId ? ev : merge(ev, partial)))`
+  - `final-report` handler: `setClaimEvents(prev => prev.map(ev => ev.eventId !== currentEventId ? ev : { ...ev, report: fullReport }))`
+  - `setStreamingEventId(null)` added at all three streaming-end paths (tick drain, SSE close, catch)
+  - `newAssessment`/`selectConversation`: clear `claimEvents` / restore from saved conversation
+  - `snapshotRef` tracks `claimEvents`; conversation persistence saves/restores `claimEvents`
+  - Storage key bumped `v2 → v3`
+  - Right panel: `<MultiClaimReportPanel key={streamingEventId ?? 'idle'} claimEvents={claimEvents} activeEventId={streamingEventId} />`
+
+**Preserved**
+- All 122 tests pass unchanged
+- Streaming UX (typing animation, synchronized effects queue) unchanged
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing (9 test files)
+- `npx eslint components/ types/` — 0 errors (2 pre-existing warnings in ChatInput.tsx)
+
+---
+
+## 2026-06-14 — Multi-Claim Assessment History (T21)
+
+### Feature — Multi-claim persistence and history view inside a single conversation
+
+**Problem solved:**
+Each new claim assessment overwrote the previous report. Users submitting multiple claims in one conversation lost all earlier results.
+
+**Solution:**
+Replace the single `report` slot with a `claimReports` map keyed by `claimId`. All SSE `report-update` and `final-report` events are now routed to their specific claim entry, leaving all other entries untouched. A new `MultiClaimReportPanel` displays the full history with a summary at the top and per-claim collapsible reports.
+
+**Added**
+- `components/report/MultiClaimReportPanel.tsx` — new panel with two sections:
+  - **Claim History** — compact summary row per claim (claimId + status badge), ordered by arrival; live badge animates during streaming
+  - **Individual Reports** — newest-first collapsible cards; each card expands to show the full `AssessmentReportView`; the streaming claim stays auto-expanded and cannot be collapsed mid-stream; past claims are user-toggleable
+  - `StatusChip` — compact inline badge (Approved/Rejected/More Info) separate from the full `RecommendationBadge`
+
+**Changed**
+- `types/conversation.ts` — `report: PartialAssessmentReport | null` → `claimReports: Record<string, PartialAssessmentReport>`
+- `components/chat/ChatContainer.tsx`:
+  - `report` state replaced with `claimReports: Record<string, PartialAssessmentReport>` + `streamingClaimId: string | null`
+  - `workflow-start` event: sets `streamingClaimId` immediately (no longer cleared on new message)
+  - `report-update` event: merges into `claimReports[event.partial.claimId]` only — other claims untouched
+  - `final-report` event: writes to `claimReports[event.report.claimId]` only
+  - `sendMessage` reset: removes `setReport(null)`; `claimReports` accumulates across messages in the same conversation; `streamingClaimId` reset to null until next `workflow-start`
+  - `newAssessment`: clears `claimReports` + `streamingClaimId`
+  - `selectConversation`: restores `claimReports` from saved conversation
+  - `snapshotRef` tracks `claimReports` (was `report`)
+  - Storage key bumped to `claim-assessment-conversations-v2` (v1 conversations cleared on upgrade)
+  - Right-panel renders `MultiClaimReportPanel` when any reports exist; unchanged empty state otherwise
+
+**Preserved**
+- All 122 tests pass unchanged (no server-side changes)
+- Streaming UX (typing animation, synchronized effects queue) unchanged
+- Sidebar, workflow timeline, tool call log — unchanged
+
+**Verified**
+- `npx tsc --noEmit` — 0 errors
+- `npx vitest run` — 122/122 tests passing (9 test files)
+- `npx eslint components/ types/` — 0 errors (2 pre-existing warnings in ChatInput.tsx)
+
+---
+
 ## 2026-06-13 — Synchronized Progressive Rendering (T18 + T19)
 
 ### Feature — Live tool lifecycle events, progressive report, synchronized UI

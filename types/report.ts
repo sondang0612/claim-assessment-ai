@@ -79,3 +79,13 @@ export interface PartialAssessmentReport {
   recommendation?: Recommendation;
   sections: PartialAssessmentSections;
 }
+
+/** One assessment run — same claimId can appear multiple times as separate events. */
+export interface ClaimEvent {
+  /** Client-generated UUID; unique per assessment run regardless of claimId. */
+  eventId: string;
+  claimId: string;
+  /** ISO timestamp of when the assessment started. */
+  timestamp: string;
+  report: PartialAssessmentReport;
+}
