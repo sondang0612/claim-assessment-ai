@@ -226,15 +226,91 @@ export default function AssessmentReportView({
           <Pending label="Recommendation" />
         )}
 
+        {/* Decision Mapping — audit trail */}
+        {sections.decisionMapping && sections.decisionMapping.length > 0 && (
+          <ReportSection title="Audit Trail" icon="🔍" defaultOpen={false}>
+            <div className="space-y-2">
+              {sections.decisionMapping.map((entry, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-2.5 text-xs"
+                >
+                  <span
+                    className={`mt-0.5 flex-shrink-0 w-10 text-center font-bold px-1.5 py-0.5 rounded-full ${
+                      entry.status === "PASS"
+                        ? "bg-green-100 text-green-700"
+                        : "bg-red-100 text-red-700"
+                    }`}
+                  >
+                    {entry.status}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="font-semibold text-gray-700">
+                        {entry.factor}
+                      </span>
+                      {entry.clauseId && (
+                        <span className="font-mono text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">
+                          {entry.clauseId}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-gray-500 leading-relaxed">
+                      {entry.explanation}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ReportSection>
+        )}
+
+        {/* Reasoning — key drivers */}
+        {sections.reasoning && (
+          <ReportSection title="Reasoning" icon="💡" defaultOpen={false}>
+            <p className="text-xs text-gray-600 mb-2">
+              {sections.reasoning.summary}
+            </p>
+            {sections.reasoning.keyDrivers.length > 0 && (
+              <ul className="space-y-1">
+                {sections.reasoning.keyDrivers.map((driver, i) => (
+                  <li key={i} className="flex items-start gap-1.5 text-xs text-gray-500">
+                    <span className="flex-shrink-0 mt-1 w-1 h-1 rounded-full bg-gray-400" />
+                    <span>{driver}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </ReportSection>
+        )}
+
         {/* Policy Citations */}
         {sections.policyCitations && sections.policyCitations.length > 0 && (
           <ReportSection title="Policy Citations" icon="📎" defaultOpen={true}>
             <div className="space-y-2">
               {sections.policyCitations.map((citation, i) => (
                 <div key={i} className="border-l-2 border-blue-200 pl-3">
-                  <p className="text-xs font-semibold text-blue-600">
-                    {citation.section}
-                  </p>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <p className="text-xs font-semibold text-blue-600">
+                      {citation.section}
+                    </p>
+                    {citation.clauseId && (
+                      <span className="font-mono text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded">
+                        {citation.clauseId}
+                      </span>
+                    )}
+                    <span
+                      className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                        citation.type === "exclusion"
+                          ? "bg-red-50 text-red-500"
+                          : citation.type === "coverage"
+                            ? "bg-green-50 text-green-600"
+                            : "bg-gray-100 text-gray-500"
+                      }`}
+                    >
+                      {citation.type}
+                    </span>
+                  </div>
                   <p className="text-xs text-gray-500 italic">
                     &ldquo;{citation.text}&rdquo;
                   </p>

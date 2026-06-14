@@ -1,6 +1,6 @@
 # Project State
 
-## Status: Complete — Modal-Based Claim Review Dashboard
+## Status: Complete — Audit-Grade Clause Tracing (T23)
 
 ---
 
@@ -95,6 +95,12 @@
   - **Persistence**: conversations saved to `localStorage` on every state change; loaded on mount via lazy `useState` initializer (SSR-safe with `typeof window` guard)
   - **Auto-title**: first 60 chars of user message; upgraded to `"Claim CLM-XXX"` when `workflow-start` fires
   - **Switching**: restores full message/toolCalls/workflowSteps/report state; does not replay animation for past conversations
+- **T23** — Audit-grade clause tracing
+  - `types/policy.ts` — `clauseId` on `Exclusion`; new `CoverageClause` interface; `coverageClauses[]` on `Policy`
+  - `lib/data/policies.ts` — `EX-01` on POL-002 exclusion; `CV-01`–`CV-07` coverage clauses across all policies
+  - `types/report.ts` — `DecisionFactor`, `ReasoningSection`, enhanced `PolicyCitation` (clauseId + type); new fields in `AssessmentReport.sections` and `PartialAssessmentSections`
+  - `lib/workflow/assessmentWorkflow.ts` — builds `decisionMapping[]` and `ReasoningSection`; citations carry clauseId/type; no clauseId hallucination (values come only from lookupPolicy)
+  - `components/report/AssessmentReport.tsx` — Audit Trail + Reasoning sections in report modal; Policy Citations show clauseId badge + type pill
 - **T22** — Modal-based claim review dashboard
   - `components/report/MultiClaimReportPanel.tsx` — toggle expansion removed; replaced with clickable history list + modal detail view; `HistoryRow` memoized to prevent full-list re-render on selection change; `handleSelect = useCallback` for stable prop; modal has Prev/Next navigation, ESC-to-close, click-outside-to-close, Live badge for streaming event
 - **T21 v2** — Event-sourced multi-claim assessment dashboard

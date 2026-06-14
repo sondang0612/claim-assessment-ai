@@ -1,6 +1,26 @@
 export type Recommendation = 'APPROVED' | 'REJECTED' | 'MORE_INFO_REQUIRED';
 
+export type DecisionFactorType = 'DOCUMENT' | 'POLICY' | 'MEDICAL' | 'BENEFIT';
+export type DecisionFactorStatus = 'PASS' | 'FAIL';
+
+/** One entry in the audit decision trail, tracing each factor to a clause when applicable. */
+export interface DecisionFactor {
+  factor: DecisionFactorType;
+  status: DecisionFactorStatus;
+  /** clauseId from policy data — null for non-policy factors (documents, medical) */
+  clauseId: string | null;
+  explanation: string;
+}
+
+export interface ReasoningSection {
+  summary: string;
+  keyDrivers: string[];
+}
+
 export interface PolicyCitation {
+  /** Clause identifier from policy data (e.g. EX-01, CV-02); null for free-text notes */
+  clauseId: string | null;
+  type: 'exclusion' | 'coverage' | 'limit' | 'notes';
   section: string;
   text: string;
 }
@@ -58,6 +78,8 @@ export interface AssessmentReport {
     benefitCalculation: BenefitCalculationSection;
     recommendation: RecommendationSection;
     policyCitations: PolicyCitation[];
+    decisionMapping: DecisionFactor[];
+    reasoning: ReasoningSection;
   };
 }
 
@@ -69,6 +91,8 @@ export type PartialAssessmentSections = Partial<{
   benefitCalculation: BenefitCalculationSection;
   recommendation: RecommendationSection;
   policyCitations: PolicyCitation[];
+  decisionMapping: DecisionFactor[];
+  reasoning: ReasoningSection;
 }>;
 
 /** Grows incrementally via report-update events; structurally assignable from AssessmentReport. */

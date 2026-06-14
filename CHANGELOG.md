@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-06-14 — Audit-Grade Clause Tracing (T23)
+
+### Feature — Every policy decision traceable to a clauseId
+
+**Added**
+- `types/policy.ts` — `clauseId: string` on `Exclusion`; new `CoverageClause { clauseId, claimType, type, description }` interface; `coverageClauses: CoverageClause[]` on `Policy`
+- `lib/data/policies.ts` — all exclusions now carry `clauseId` (e.g. `EX-01`); all three policies have `coverageClauses` with stable IDs (`CV-01`–`CV-07`)
+- `types/report.ts` — `DecisionFactor { factor, status, clauseId, explanation }`, `ReasoningSection { summary, keyDrivers[] }`, enhanced `PolicyCitation` (adds `clauseId`, `type`); `AssessmentReport.sections` and `PartialAssessmentSections` include `decisionMapping` and `reasoning`
+- `lib/workflow/assessmentWorkflow.ts` — both `runAssessmentWorkflow` and `streamAssessmentWorkflow` now build `decisionMapping[]` (one entry per DOCUMENT/POLICY/MEDICAL/BENEFIT factor with PASS/FAIL and traced clauseId) and a `ReasoningSection`; `policyCitations` now carry `clauseId` and `type`; `reasoningText` string preserved on `RecommendationSection`
+- `components/report/AssessmentReport.tsx` — two new collapsible sections in report modal: **Audit Trail** (decision mapping table with PASS/FAIL badges + clauseId chips) and **Reasoning** (summary + key drivers list); Policy Citations now show clauseId badge + type pill
+
+**Decision rules (unchanged in logic, now traceable)**
+- `MORE_INFO_REQUIRED` — any invalid/missing document (DOCUMENT FAIL, no clauseId)
+- `REJECTED` — inactive policy, excluded claim type (traces to EX-XX), or medical necessity failure
+- `APPROVED` — all factors PASS; benefit calculation traces to coverage clauseId (CV-XX)
+
+**Constraint: no clauseId hallucination** — the workflow only uses clauseIds from `policy.exclusions[n].clauseId` and `policy.coverageClauses[n].clauseId` as returned by `lookupPolicy`
+
+**Tests**
+- All 122 existing tests pass unchanged (additive change only)
+- TypeScript strict: 0 errors
+
+---
+
 ## 2026-06-14 — Modal-Based Claim Review Dashboard (T22)
 
 ### Feature — Replace toggle expansion with modal-based detail view

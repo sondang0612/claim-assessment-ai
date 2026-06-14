@@ -115,9 +115,12 @@
 |  |  types/agent.ts      <- ChatMessage, ToolCall        |  |
 |  |  types/claims.ts     <- Claim, ClaimType, Document   |  |
 |  |  types/policy.ts     <- Policy, Coverage, Exclusion  |  |
+|  |  |                     CoverageClause (clauseId)    |  |
 |  |  types/report.ts     <- AssessmentReport             |  |
 |  |  |                     PartialAssessmentReport       |  |
 |  |  |                     Recommendation                |  |
+|  |  |                     DecisionFactor (audit trail) |  |
+|  |  |                     ReasoningSection              |  |
 |  |  types/workflow.ts   <- WorkflowToolCall             |  |
 |  |                         WorkflowEvent (11 variants)  |  |
 |  +------------------------------------------------------+  |
