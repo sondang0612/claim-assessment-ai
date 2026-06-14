@@ -12,7 +12,7 @@ import { calculateBenefit } from '@/lib/tools/calculateBenefit';
 import type { ClaimType } from '@/types/claims';
 import type { Recommendation } from '@/types/report';
 
-/** Pure workflow logic — mirrors the agent's decision rules in lib/agent/prompts.ts */
+/** Pure workflow logic — mirrors the decision rules in lib/workflow/assessmentWorkflow.ts */
 function deriveRecommendation(opts: {
   docsAllValid: boolean;
   policyActive: boolean;

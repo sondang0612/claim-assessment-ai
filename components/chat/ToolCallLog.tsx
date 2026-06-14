@@ -7,7 +7,7 @@ export interface ToolCallEntry {
   toolName: string;
   input: Record<string, unknown>;
   output?: unknown;
-  status: 'calling' | 'done' | 'error';
+  status: 'running' | 'calling' | 'completed' | 'done' | 'failed' | 'error';
 }
 
 const TOOL_META: Record<string, { icon: string; label: string }> = {
@@ -69,9 +69,9 @@ export default function ToolCallLog({ toolCalls }: { toolCalls: ToolCallEntry[] 
                 <span className="flex items-center gap-1.5 flex-shrink-0 ml-2">
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      call.status === 'calling'
+                      call.status === 'running' || call.status === 'calling'
                         ? 'bg-yellow-400 animate-pulse'
-                        : call.status === 'done'
+                        : call.status === 'completed' || call.status === 'done'
                         ? 'bg-green-400'
                         : 'bg-red-400'
                     }`}

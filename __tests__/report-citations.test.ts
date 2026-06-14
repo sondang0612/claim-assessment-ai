@@ -1,121 +1,96 @@
 /**
- * Report generation and policy citations validation tests.
- * Verifies that parseReportFromText correctly reconstructs structured reports,
- * and that policy data contains the citation-worthy text the agent is expected
- * to quote in its <report> block.
+ * Report citations tests.
+ * Verifies that the assessment workflow produces correct policy citations derived
+ * from structured policy data, and that the source policy data is citation-worthy.
  */
 import { describe, it, expect } from 'vitest';
-import { parseReportFromText } from '@/lib/report/generateReport';
+import { runAssessmentWorkflow } from '@/lib/workflow/assessmentWorkflow';
 import { lookupPolicy } from '@/lib/tools/lookupPolicy';
-import type { AssessmentReport, Recommendation, PolicyCitation } from '@/types/report';
+import type { ParsedClaim } from '@/lib/parser/claimParser';
+import type { PolicyCitation } from '@/types/report';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const CLM_001: ParsedClaim = {
+  claimId: 'CLM-001',
+  policyId: 'POL-001',
+  patientName: 'John Doe',
+  documentIds: ['DOC-001', 'DOC-002'],
+  claimType: 'surgery',
+  diagnosis: 'appendicitis',
+  procedures: ['44970'],
+  requestedAmount: 5000,
+};
 
-function buildReport(
-  recommendation: Recommendation,
-  policyId: string,
-  policyCitations: PolicyCitation[],
-  overrides: Partial<AssessmentReport> = {},
-): AssessmentReport {
-  return {
-    claimId: 'CLM-TEST',
-    patientName: 'Test Patient',
-    assessmentDate: '2026-06-12',
-    recommendation,
-    sections: {
-      documentReview: { summary: 'Documents reviewed.', findings: [] },
-      policyVerification: {
-        summary: 'Policy verified.',
-        policyId,
-        holderName: 'Test Patient',
-        status: 'active',
-        coverageDetails: { coveragePercent: 90 },
-      },
-      medicalNecessity: { summary: 'Necessity assessed.', necessary: true, rationale: 'Required.' },
-      benefitCalculation: {
-        summary: 'Benefit calculated.',
-        requestedAmount: 5000,
-        coveredAmount: 4500,
-        patientResponsibility: 500,
-        deductibleApplied: 0,
-      },
-      recommendation: { decision: recommendation, reasoning: 'Based on assessment.' },
-      policyCitations,
-    },
-    ...overrides,
-  };
-}
+const CLM_002: ParsedClaim = {
+  claimId: 'CLM-002',
+  policyId: 'POL-002',
+  patientName: 'Jane Smith',
+  documentIds: ['DOC-004', 'DOC-005'],
+  claimType: 'elective',
+  diagnosis: 'elective cosmetic surgery',
+  procedures: ['15829'],
+  requestedAmount: 8000,
+};
 
-// ─── Report generation ────────────────────────────────────────────────────────
+const CLM_003: ParsedClaim = {
+  claimId: 'CLM-003',
+  policyId: 'POL-003',
+  patientName: 'Bob Johnson',
+  documentIds: ['DOC-006', 'DOC-003'],
+  claimType: 'surgery',
+  diagnosis: 'fracture',
+  procedures: ['27244'],
+  requestedAmount: 12000,
+};
 
-describe('Report generation — parsing', () => {
-  it('parses APPROVED report with correct financial figures', () => {
-    const report = buildReport('APPROVED', 'POL-001', [
-      { section: 'Surgery coverage', text: '90% coverage up to $30,000.' },
-    ]);
-    const parsed = parseReportFromText(`<report>${JSON.stringify(report)}</report>`);
+// ─── Workflow citation generation ─────────────────────────────────────────────
 
-    expect(parsed?.recommendation).toBe('APPROVED');
-    expect(parsed?.sections.benefitCalculation.coveredAmount).toBe(4500);
-    expect(parsed?.sections.benefitCalculation.patientResponsibility).toBe(500);
-    expect(parsed?.sections.benefitCalculation.deductibleApplied).toBe(0);
+describe('Report citations — workflow output', () => {
+  it('CLM-001 approved report includes policy notes citation', () => {
+    const { report } = runAssessmentWorkflow(CLM_001);
+    const citations = report.sections.policyCitations;
+    expect(citations.length).toBeGreaterThan(0);
+    expect(citations[0].section).toBe('Policy Notes');
+    expect(citations[0].text.length).toBeGreaterThan(10);
   });
 
-  it('parses REJECTED report with exclusion citation', () => {
-    const exclusionText =
-      'Elective and cosmetic procedures are not covered under this plan (Section 4.2).';
-    const report = buildReport('REJECTED', 'POL-002', [
-      { section: 'Exclusions — Section 4.2', text: exclusionText },
-    ]);
-    const parsed = parseReportFromText(`<report>${JSON.stringify(report)}</report>`);
-
-    expect(parsed?.recommendation).toBe('REJECTED');
-    expect(parsed?.sections.policyCitations[0].text).toContain('not covered');
-    expect(parsed?.sections.policyCitations[0].section).toContain('4.2');
+  it('CLM-002 rejected report includes exclusion citation', () => {
+    const { report } = runAssessmentWorkflow(CLM_002);
+    const citations = report.sections.policyCitations;
+    const exclusionCitation = citations.find((c: PolicyCitation) =>
+      c.section === 'Exclusion',
+    );
+    expect(exclusionCitation).toBeDefined();
+    expect(exclusionCitation?.text).toMatch(/elective/i);
+    expect(exclusionCitation?.text).toMatch(/not covered/i);
   });
 
-  it('parses MORE_INFO_REQUIRED report with missing document finding', () => {
-    const report = buildReport('MORE_INFO_REQUIRED', 'POL-003', [], {
-      sections: {
-        ...buildReport('MORE_INFO_REQUIRED', 'POL-003', []).sections,
-        documentReview: {
-          summary: 'Itemized bill (DOC-003) is missing.',
-          findings: [
-            {
-              documentId: 'DOC-003',
-              documentType: 'itemized_bill',
-              status: 'missing',
-              issues: ['Itemized bill has not been submitted.'],
-            },
-          ],
-        },
-        recommendation: {
-          decision: 'MORE_INFO_REQUIRED',
-          reasoning: 'Missing itemized bill required under Section 3.1.',
-        },
-      },
-    });
-    const parsed = parseReportFromText(`<report>${JSON.stringify(report)}</report>`);
-
-    expect(parsed?.recommendation).toBe('MORE_INFO_REQUIRED');
-    expect(parsed?.sections.documentReview.findings[0].documentId).toBe('DOC-003');
-    expect(parsed?.sections.documentReview.findings[0].status).toBe('missing');
+  it('CLM-001 report round-trip — financial figures are preserved', () => {
+    const { report } = runAssessmentWorkflow(CLM_001);
+    const bc = report.sections.benefitCalculation;
+    expect(bc.coveredAmount).toBe(4500);
+    expect(bc.patientResponsibility).toBe(500);
+    expect(bc.deductibleApplied).toBe(0);
+    expect(bc.requestedAmount).toBe(5000);
   });
 
-  it('preserves all fields across serialise → parse round-trip', () => {
-    const report = buildReport('APPROVED', 'POL-001', [
-      { section: 'Surgery', text: '90% covered.' },
-    ]);
-    const parsed = parseReportFromText(`<report>${JSON.stringify(report)}</report>`);
+  it('CLM-003 more-info report has no exclusion citation', () => {
+    const { report } = runAssessmentWorkflow(CLM_003);
+    const exclusionCitation = report.sections.policyCitations.find(
+      (c: PolicyCitation) => c.section === 'Exclusion',
+    );
+    expect(exclusionCitation).toBeUndefined();
+  });
 
-    expect(parsed?.claimId).toBe(report.claimId);
-    expect(parsed?.patientName).toBe(report.patientName);
-    expect(parsed?.assessmentDate).toBe(report.assessmentDate);
-    expect(parsed?.sections.policyVerification.policyId).toBe('POL-001');
+  it('CLM-001 report preserves all identity fields', () => {
+    const { report } = runAssessmentWorkflow(CLM_001);
+    expect(report.claimId).toBe('CLM-001');
+    expect(report.patientName).toBe('John Doe');
+    expect(report.assessmentDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(report.sections.policyVerification.policyId).toBe('POL-001');
   });
 });
 
-// ─── Policy citations validation ──────────────────────────────────────────────
+// ─── Policy citations source data validation ──────────────────────────────────
 
 describe('Policy citations — source data validation', () => {
   it('POL-001 notes field is non-empty and suitable for citations', () => {
@@ -150,20 +125,5 @@ describe('Policy citations — source data validation', () => {
     if (!result.success) return;
     expect(result.policy.notes).toMatch(/itemized bill/i);
     expect(result.policy.notes).toMatch(/section/i);
-  });
-
-  it('report with multiple citations preserves order and content', () => {
-    const citations: PolicyCitation[] = [
-      { section: 'Section 2.1 — Surgery Coverage', text: '90% coverage up to $30,000.' },
-      { section: 'Section 1.4 — Deductibles', text: 'Annual deductible applies per calendar year.' },
-      { section: 'Section 5.2 — Network', text: 'In-network providers receive preferred rates.' },
-    ];
-    const report = buildReport('APPROVED', 'POL-001', citations);
-    const parsed = parseReportFromText(`<report>${JSON.stringify(report)}</report>`);
-
-    expect(parsed?.sections.policyCitations).toHaveLength(3);
-    expect(parsed?.sections.policyCitations[0].section).toContain('Surgery');
-    expect(parsed?.sections.policyCitations[1].section).toContain('Deductibles');
-    expect(parsed?.sections.policyCitations[2].text).toContain('In-network');
   });
 });

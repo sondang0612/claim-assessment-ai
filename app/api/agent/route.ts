@@ -1,25 +1,39 @@
-import { type NextRequest } from 'next/server';
-import { runAgent } from '@/lib/agent/agent';
-import { DEFAULT_MODEL, type DeepSeekModel } from '@/lib/providers/deepseek';
-import type { ChatMessage } from '@/types/agent';
+import { type NextRequest } from "next/server";
+import {
+  classifyRequest,
+  HELP_MESSAGE,
+} from "@/lib/classifier/requestClassifier";
+import { parseClaim } from "@/lib/parser/claimParser";
+import { streamAssessmentWorkflow } from "@/lib/workflow/assessmentWorkflow";
+import { DEFAULT_MODEL, type DeepSeekModel } from "@/lib/providers/deepseek";
+import type { ChatMessage } from "@/types/agent";
+import type { WorkflowEvent } from "@/types/workflow";
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
-const VALID_MODELS: DeepSeekModel[] = ['deepseek-chat', 'deepseek-reasoner'];
+const VALID_MODELS: DeepSeekModel[] = ["deepseek-chat", "deepseek-reasoner"];
 
-type ToolCallChunk = { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown };
-type ToolResultChunk = { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const SSE_HEADERS = {
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache",
+  Connection: "keep-alive",
+};
 
 export async function POST(request: NextRequest) {
   let messages: ChatMessage[];
   let model: DeepSeekModel;
 
   try {
-    const body = (await request.json()) as { messages?: unknown; model?: unknown };
+    const body = (await request.json()) as {
+      messages?: unknown;
+      model?: unknown;
+    };
 
     if (!Array.isArray(body.messages) || body.messages.length === 0) {
       return Response.json(
-        { error: 'messages array is required and must not be empty' },
+        { error: "messages array is required and must not be empty" },
         { status: 400 },
       );
     }
@@ -32,47 +46,63 @@ export async function POST(request: NextRequest) {
         ? (requested as DeepSeekModel)
         : DEFAULT_MODEL;
   } catch {
-    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const agentResult = runAgent(messages, model);
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((m) => m.role === "user");
+  if (!lastUserMessage) {
+    return Response.json(
+      { error: "No user message found in history" },
+      { status: 400 },
+    );
+  }
+
+  const { messageClass } = classifyRequest(lastUserMessage.content);
+  console.log(`[api/agent] classified message as: ${messageClass}`);
+
   const encoder = new TextEncoder();
+
+  function sseChunk(event: WorkflowEvent): Uint8Array {
+    return encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Non-claim messages: single event, no LLM call
+      if (messageClass !== "claim_request") {
+        controller.enqueue(
+          sseChunk({ type: "message", messageClass, summary: HELP_MESSAGE }),
+        );
+        controller.close();
+        return;
+      }
+
       try {
-        for await (const chunk of agentResult.fullStream) {
-          let event: Record<string, unknown> | null = null;
+        const parsedClaim = await parseClaim(lastUserMessage.content, model);
+        console.log(
+          `[api/agent] parsed claim=${parsedClaim.claimId} policy=${parsedClaim.policyId}`,
+        );
 
-          if (chunk.type === 'text-delta') {
-            event = { type: 'text', text: chunk.text };
-          } else if (chunk.type === 'tool-call') {
-            const tc = chunk as unknown as ToolCallChunk;
-            event = { type: 'tool-call', toolCallId: tc.toolCallId, toolName: tc.toolName, input: tc.input };
-          } else if (chunk.type === 'tool-result') {
-            const tr = chunk as unknown as ToolResultChunk;
-            event = { type: 'tool-result', toolCallId: tr.toolCallId, toolName: tr.toolName, output: tr.output };
-          }
-
-          if (event !== null) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        for await (const event of streamAssessmentWorkflow(parsedClaim)) {
+          controller.enqueue(sseChunk(event));
+          if (event.type === "final-report") {
+            console.log(
+              `[api/agent] assessment complete recommendation=${event.report.recommendation}`,
+            );
           }
         }
-        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
       } catch (error) {
-        const msg = error instanceof Error ? error.message : 'Stream error';
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: msg })}\n\n`));
-      } finally {
-        controller.close();
+        const message =
+          error instanceof Error ? error.message : "Assessment failed";
+        console.error("[api/agent] error:", error);
+        controller.enqueue(sseChunk({ type: "error", message }));
       }
+
+      controller.close();
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
-  });
+  return new Response(stream, { headers: SSE_HEADERS });
 }

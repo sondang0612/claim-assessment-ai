@@ -1,12 +1,19 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
-import { parseReportFromText } from "@/lib/report/generateReport";
-import type { AssessmentReport } from "@/types/report";
+import { useState, useRef, useCallback, useEffect } from "react";
+import type { PartialAssessmentReport, ClaimEvent } from "@/types/report";
+import type { WorkflowEvent } from "@/types/workflow";
+import type { Conversation } from "@/types/conversation";
+import type { ToolCallEntry } from "./ToolCallLog";
+import type { WorkflowStepEntry } from "./WorkflowTimeline";
 import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
-import ToolCallLog, { type ToolCallEntry } from "./ToolCallLog";
-import AssessmentReportView from "../report/AssessmentReport";
+import ToolCallLog from "./ToolCallLog";
+import WorkflowTimeline from "./WorkflowTimeline";
+import MultiClaimReportPanel from "../report/MultiClaimReportPanel";
+import Sidebar from "../sidebar/Sidebar";
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 type DeepSeekModel = "deepseek-chat" | "deepseek-reasoner";
 
@@ -15,46 +22,310 @@ interface Message {
   content: string;
 }
 
-type SSEEvent =
-  | { type: "text"; text: string }
-  | {
-      type: "tool-call";
-      toolCallId: string;
-      toolName: string;
-      input: Record<string, unknown>;
-    }
-  | {
-      type: "tool-result";
-      toolCallId: string;
-      toolName: string;
-      output: unknown;
-    }
-  | { type: "error"; message: string };
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/** Characters revealed per animation frame (~60 fps → ~300 chars/sec). */
+const CHARS_PER_FRAME = 5;
+
+const STORAGE_KEY = "claim-assessment-conversations-v3";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function generateId(): string {
+  return typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function loadConversations(): Conversation[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Conversation[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Synchronized effect queue type ──────────────────────────────────────────
+
+interface ScheduledEffect {
+  /** Fire when displayedRef.current.length reaches this value. */
+  fireAtPos: number;
+  effect: () => void;
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function ChatContainer() {
+  // ── Conversation history ─────────────────────────────────────────────────
+  const [conversations, setConversations] =
+    useState<Conversation[]>(loadConversations);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // ── Active conversation's chat state ─────────────────────────────────────
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
-  const [report, setReport] = useState<AssessmentReport | null>(null);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepEntry[]>([]);
+  // Append-only event log; same claimId can appear multiple times
+  const [claimEvents, setClaimEvents] = useState<ClaimEvent[]>([]);
+  // The eventId currently streaming (null between runs); drives panel expansion
+  const [streamingEventId, setStreamingEventId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [model, setModel] = useState<DeepSeekModel>("deepseek-chat");
+
   const abortRef = useRef<AbortController | null>(null);
 
+  // ── Typing-queue refs ─────────────────────────────────────────────────────
+  const pendingRef = useRef("");
+  const displayedRef = useRef("");
+  const baseMessagesRef = useRef<Message[]>([]);
+  const rafIdRef = useRef<number | null>(null);
+  const typingActiveRef = useRef(false);
+
+  // ── Synchronized side-effect queue ───────────────────────────────────────
+  const scheduledEffectsRef = useRef<ScheduledEffect[]>([]);
+  const totalEnqueuedRef = useRef(0);
+
+  // ── Per-message event ID (stable across the SSE closure) ─────────────────
+  const streamingEventIdRef = useRef<string | null>(null);
+
+  // ── Snapshot ref (latest state for saving without stale closures) ─────────
+  const snapshotRef = useRef({
+    messages,
+    toolCalls,
+    workflowSteps,
+    claimEvents,
+  });
+  const prevIsStreamingRef = useRef(false);
+
+  useEffect(() => {
+    snapshotRef.current = { messages, toolCalls, workflowSteps, claimEvents };
+  });
+
+  // ── Persist conversations to localStorage ─────────────────────────────────
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [conversations]);
+
+  // ── Save completed conversation state when streaming finishes ─────────────
+  useEffect(() => {
+    const wasPrevStreaming = prevIsStreamingRef.current;
+    prevIsStreamingRef.current = isStreaming;
+
+    if (wasPrevStreaming && !isStreaming && activeConvId) {
+      const {
+        messages: msgs,
+        toolCalls: tcs,
+        workflowSteps: wfs,
+        claimEvents: evts,
+      } = snapshotRef.current;
+      if (msgs.length > 0) {
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeConvId
+              ? {
+                  ...c,
+                  messages: msgs,
+                  toolCalls: tcs,
+                  workflowSteps: wfs,
+                  claimEvents: evts,
+                  updatedAt: new Date().toISOString(),
+                }
+              : c,
+          ),
+        );
+      }
+    }
+  }, [isStreaming, activeConvId]);
+
+  // ── Reset helpers shared by selectConversation and newAssessment ──────────
+  function clearAnimation() {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    pendingRef.current = "";
+    displayedRef.current = "";
+    totalEnqueuedRef.current = 0;
+    scheduledEffectsRef.current = [];
+    typingActiveRef.current = false;
+  }
+
+  // ── Load a historical conversation ────────────────────────────────────────
+  const selectConversation = useCallback(
+    (id: string) => {
+      if (isStreaming || id === activeConvId) return;
+      const conv = conversations.find((c) => c.id === id);
+      if (!conv) return;
+
+      clearAnimation();
+      setActiveConvId(id);
+      setMessages(conv.messages as Message[]);
+      setToolCalls(conv.toolCalls as ToolCallEntry[]);
+      setWorkflowSteps(conv.workflowSteps as WorkflowStepEntry[]);
+      setClaimEvents(conv.claimEvents ?? []);
+      //setStreamingEventId(null);
+    },
+    [isStreaming, activeConvId, conversations],
+  );
+
+  // ── Start a fresh conversation ────────────────────────────────────────────
+  const newAssessment = useCallback(() => {
+    if (isStreaming) return;
+    clearAnimation();
+    setActiveConvId(null);
+    setMessages([]);
+    setToolCalls([]);
+    setWorkflowSteps([]);
+    setClaimEvents([]);
+    //setStreamingEventId(null);
+  }, [isStreaming]);
+
+  // ── Delete a conversation ─────────────────────────────────────────────────
+  const deleteConversation = useCallback(
+    (id: string) => {
+      if (id === activeConvId) newAssessment();
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+    },
+    [activeConvId, newAssessment],
+  );
+
+  // ── Rename a conversation ────────────────────────────────────────────────
+  const renameConversation = useCallback((id: string, title: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title } : c)),
+    );
+  }, []);
+
+  // ── sendMessage ──────────────────────────────────────────────────────────
   const sendMessage = useCallback(
     async (content: string) => {
       if (isStreaming || !content.trim()) return;
 
+      // Create or reuse active conversation
+      const convId = activeConvId ?? generateId();
+      if (!activeConvId) {
+        const title =
+          content.length > 60 ? content.slice(0, 57) + "…" : content;
+        const now = new Date().toISOString();
+        setConversations((prev) => [
+          {
+            id: convId,
+            title,
+            messages: [],
+            toolCalls: [],
+            workflowSteps: [],
+            claimEvents: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          ...prev,
+        ]);
+        setActiveConvId(convId);
+      }
+
+      // ── Reset animation state ──────────────────────────────────────────
+      clearAnimation();
+
+      // Generate a unique ID for THIS assessment run — stable across the SSE closure.
+      const eventId = generateId();
+      streamingEventIdRef.current = eventId;
+
       const userMsg: Message = { role: "user", content };
       const nextMessages = [...messages, userMsg];
+      baseMessagesRef.current = nextMessages;
 
       setMessages([...nextMessages, { role: "assistant", content: "" }]);
       setToolCalls([]);
-      setReport(null);
+      setWorkflowSteps([]);
+      //setStreamingEventId(null);
       setIsStreaming(true);
 
       const controller = new AbortController();
       abortRef.current = controller;
-      let assistantText = "";
 
+      let sseComplete = false;
+
+      // ── RAF typing loop ──────────────────────────────────────────────────
+      function tick() {
+        if (pendingRef.current.length === 0) {
+          if (scheduledEffectsRef.current.length > 0) {
+            const remaining = scheduledEffectsRef.current;
+            scheduledEffectsRef.current = [];
+            for (const e of remaining) e.effect();
+          }
+          typingActiveRef.current = false;
+          rafIdRef.current = null;
+          if (sseComplete) {
+            //setStreamingEventId(null);
+            setIsStreaming(false);
+          }
+          return;
+        }
+
+        const chunk = pendingRef.current.slice(0, CHARS_PER_FRAME);
+        pendingRef.current = pendingRef.current.slice(CHARS_PER_FRAME);
+        displayedRef.current += chunk;
+
+        const revealedPos = displayedRef.current.length;
+        if (scheduledEffectsRef.current.length > 0) {
+          const due = scheduledEffectsRef.current.filter(
+            (e) => e.fireAtPos <= revealedPos,
+          );
+          if (due.length > 0) {
+            scheduledEffectsRef.current = scheduledEffectsRef.current.filter(
+              (e) => e.fireAtPos > revealedPos,
+            );
+            for (const e of due) e.effect();
+          }
+        }
+
+        setMessages([
+          ...baseMessagesRef.current,
+          { role: "assistant", content: displayedRef.current },
+        ]);
+
+        rafIdRef.current = requestAnimationFrame(tick);
+      }
+
+      function enqueue(text: string) {
+        pendingRef.current += text;
+        totalEnqueuedRef.current += text.length;
+        if (!typingActiveRef.current) {
+          typingActiveRef.current = true;
+          rafIdRef.current = requestAnimationFrame(tick);
+        }
+      }
+
+      function scheduleEffect(effect: () => void) {
+        scheduledEffectsRef.current.push({
+          fireAtPos: totalEnqueuedRef.current,
+          effect,
+        });
+      }
+
+      function cancelTyping(finalText: string) {
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        typingActiveRef.current = false;
+        pendingRef.current = "";
+        displayedRef.current = finalText;
+        setMessages([
+          ...baseMessagesRef.current,
+          { role: "assistant", content: finalText },
+        ]);
+      }
+
+      // ── SSE stream reader ────────────────────────────────────────────────
       try {
         const res = await fetch("/api/agent", {
           method: "POST",
@@ -63,151 +334,358 @@ export default function ChatContainer() {
           signal: controller.signal,
         });
 
-        if (!res.ok || !res.body) {
-          throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          let errorMsg = `HTTP ${res.status}`;
+          try {
+            const errData = (await res.json()) as { error?: string };
+            errorMsg = errData.error ?? errorMsg;
+          } catch {
+            /* ignore */
+          }
+          throw new Error(errorMsg);
         }
+
+        if (!res.body) throw new Error("No response body");
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let buf = "";
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          buf += decoder.decode(value, { stream: true });
-          const parts = buf.split("\n\n");
-          buf = parts.pop() ?? "";
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
 
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") break;
+          for (const sseChunk of parts) {
+            const dataLine = sseChunk
+              .split("\n")
+              .find((l) => l.startsWith("data: "));
+            if (!dataLine) continue;
 
-            let event: SSEEvent;
-            try {
-              event = JSON.parse(raw) as SSEEvent;
-            } catch {
-              continue;
-            }
+            const event = JSON.parse(dataLine.slice(6)) as WorkflowEvent;
 
-            if (event.type === "text") {
-              assistantText += event.text;
-              setMessages((prev) => [
-                ...prev.slice(0, -1),
-                { role: "assistant", content: assistantText },
-              ]);
-            } else if (event.type === "tool-call") {
-              setToolCalls((prev) => [
-                ...prev,
-                {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  input: event.input,
-                  status: "calling",
-                },
-              ]);
-            } else if (event.type === "tool-result") {
-              setToolCalls((prev) =>
-                prev.map((tc) =>
-                  tc.toolCallId === event.toolCallId
-                    ? { ...tc, output: event.output, status: "done" }
-                    : tc,
-                ),
-              );
-            } else if (event.type === "error") {
-              throw new Error(event.message);
+            switch (event.type) {
+              case "message":
+                enqueue(event.summary);
+                break;
+
+              case "workflow-start": {
+                // Create the event entry immediately — both state updates batch together.
+                const newEvent: ClaimEvent = {
+                  eventId,
+                  claimId: event.claimId,
+                  timestamp: new Date().toISOString(),
+                  report: { claimId: event.claimId, sections: {} },
+                };
+                setClaimEvents((prev) => [...prev, newEvent]);
+                //setStreamingEventId(eventId);
+                setConversations((prev) =>
+                  prev.map((c) =>
+                    c.id === convId
+                      ? {
+                          ...c,
+                          title: `Claim ${event.claimId}`,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : c,
+                  ),
+                );
+                enqueue(`Assessment started for claim ${event.claimId}.\n`);
+                break;
+              }
+
+              case "step-start":
+                scheduleEffect(() => {
+                  const { step, stepName } = event;
+                  setWorkflowSteps((prev) => {
+                    if (prev.some((s) => s.step === step)) {
+                      return prev.map((s) =>
+                        s.step === step ? { ...s, status: "running" } : s,
+                      );
+                    }
+                    return [...prev, { step, stepName, status: "running" }];
+                  });
+                });
+                enqueue(`\n## Step ${event.step}: ${event.stepName}\n`);
+                break;
+
+              case "tool-start":
+                scheduleEffect(() => {
+                  const entry: ToolCallEntry = {
+                    toolCallId: event.toolCallId,
+                    toolName: event.toolName,
+                    input: event.input,
+                    status: "running",
+                  };
+                  setToolCalls((prev) => [...prev, entry]);
+                });
+                break;
+
+              case "tool-complete":
+                enqueue(`${event.line}\n`);
+                scheduleEffect(() => {
+                  setToolCalls((prev) =>
+                    prev.map((tc) =>
+                      tc.toolCallId === event.toolCall.toolCallId
+                        ? {
+                            ...tc,
+                            output: event.toolCall.output,
+                            status: "completed",
+                          }
+                        : tc,
+                    ),
+                  );
+                });
+                break;
+
+              case "step-result":
+                // Handled by tool-start / tool-complete — no-op here.
+                break;
+
+              case "step-complete":
+                scheduleEffect(() => {
+                  setWorkflowSteps((prev) =>
+                    prev.map((s) =>
+                      s.step === event.step ? { ...s, status: "completed" } : s,
+                    ),
+                  );
+                });
+                break;
+
+              case "report-update":
+                scheduleEffect(() => {
+                  const currentEventId = streamingEventIdRef.current;
+                  if (!currentEventId) return;
+                  setClaimEvents((prev) =>
+                    prev.map((ev) => {
+                      if (ev.eventId !== currentEventId) return ev;
+                      const existing = ev.report;
+                      return {
+                        ...ev,
+                        report: {
+                          ...existing,
+                          ...event.partial,
+                          sections: {
+                            ...existing.sections,
+                            ...event.partial.sections,
+                          },
+                        },
+                      };
+                    }),
+                  );
+                });
+                break;
+
+              case "workflow-complete":
+                enqueue(
+                  `\n---\n\n## Final Assessment\n\n${event.recommendation}\n${event.reasoning}\n`,
+                );
+                break;
+
+              case "final-report":
+                scheduleEffect(() => {
+                  const currentEventId = streamingEventIdRef.current;
+                  if (!currentEventId) return;
+                  setClaimEvents((prev) =>
+                    prev.map((ev) =>
+                      ev.eventId === currentEventId
+                        ? {
+                            ...ev,
+                            report: event.report as PartialAssessmentReport,
+                          }
+                        : ev,
+                    ),
+                  );
+                });
+                break;
+
+              case "error":
+                enqueue(
+                  `\n\nError: ${event.message}\n\nCheck that DEEPSEEK_API_KEY is set in .env.local.`,
+                );
+                break;
             }
           }
         }
 
-        // Extract and strip the <report> block from the displayed text
-        const parsed = parseReportFromText(assistantText);
-        if (parsed) {
-          setReport(parsed);
-          const clean = assistantText
-            .replace(/<report>[\s\S]*?<\/report>/g, "")
-            .trim();
-          setMessages((prev) => [
-            ...prev.slice(0, -1),
-            { role: "assistant", content: clean },
-          ]);
+        sseComplete = true;
+        if (!typingActiveRef.current && pendingRef.current.length === 0) {
+          if (scheduledEffectsRef.current.length > 0) {
+            const remaining = scheduledEffectsRef.current;
+            scheduledEffectsRef.current = [];
+            for (const e of remaining) e.effect();
+          }
+          //setStreamingEventId(null);
+          setIsStreaming(false);
         }
       } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") return;
-        setMessages((prev) => [
-          ...prev.slice(0, -1),
-          {
-            role: "assistant",
-            content:
-              "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.",
-          },
-        ]);
-      } finally {
+        if (err instanceof Error && err.name === "AbortError") {
+          cancelTyping("Assessment cancelled.");
+        } else {
+          cancelTyping(
+            "An error occurred. Please check that DEEPSEEK_API_KEY is set in .env.local and try again.",
+          );
+        }
+        //setStreamingEventId(null);
         setIsStreaming(false);
+      } finally {
         abortRef.current = null;
       }
     },
-    [messages, model, isStreaming],
+    [messages, model, isStreaming, activeConvId],
   );
 
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* ── Left: chat panel ── */}
-      <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200 bg-white">
-        {/* Header */}
-        <header className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
-          <div>
-            <h1 className="text-base font-bold text-gray-900">
-              Claim Assessment AI
-            </h1>
-            {/* <p className="text-xs text-gray-400">
-              Powered by DeepSeek ·{' '}
-              <span className="font-mono">{model}</span>
-            </p> */}
-          </div>
-          {isStreaming && (
-            <span className="flex items-center gap-1.5 text-xs text-blue-500">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              Assessing…
-            </span>
-          )}
-        </header>
+    <div className="flex h-screen overflow-hidden bg-gray-50">
+      {/* ── Desktop sidebar (participates in flex flow, collapses to 0 width) ── */}
+      <div
+        className={`flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out hidden md:block ${
+          sidebarOpen ? "w-64" : "w-0"
+        }`}
+      >
+        {/* Inner div keeps the sidebar at its natural width so content doesn't reflow. */}
+        <div className="w-64 h-full">
+          <Sidebar
+            conversations={conversations}
+            activeId={activeConvId}
+            isStreaming={isStreaming}
+            onSelect={(id) => {
+              selectConversation(id);
+            }}
+            onNew={newAssessment}
+            onRename={renameConversation}
+            onDelete={deleteConversation}
+          />
+        </div>
+      </div>
 
-        {/* Messages */}
-        <MessageList messages={messages} isStreaming={isStreaming} />
-
-        {/* Tool call log (only while/after streaming) */}
-        {toolCalls.length > 0 && <ToolCallLog toolCalls={toolCalls} />}
-
-        {/* Input */}
-        <ChatInput
-          onSend={sendMessage}
+      {/* ── Mobile drawer (fixed overlay) ── */}
+      <div
+        className={`fixed inset-y-0 left-0 z-50 w-72 transform transition-transform duration-300 ease-in-out md:hidden ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <Sidebar
+          conversations={conversations}
+          activeId={activeConvId}
           isStreaming={isStreaming}
-          model={model}
-          onModelChange={setModel}
-          onAbort={() => abortRef.current?.abort()}
+          onSelect={(id) => {
+            selectConversation(id);
+            setSidebarOpen(false);
+          }}
+          onNew={() => {
+            newAssessment();
+            setSidebarOpen(false);
+          }}
+          onRename={renameConversation}
+          onDelete={deleteConversation}
         />
       </div>
 
-      {/* ── Right: report panel ── */}
-      <div className="w-96 xl:w-[480px] flex flex-col bg-gray-50 overflow-y-auto flex-shrink-0">
-        {report ? (
-          <AssessmentReportView report={report} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center p-8 text-center">
-            <div>
-              <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
-                <span className="text-gray-400 text-xl">📊</span>
-              </div>
-              <p className="text-sm text-gray-400 font-medium">No report yet</p>
-              <p className="text-xs text-gray-300 mt-1">
-                Submit a claim assessment to see the structured report here.
-              </p>
+      {/* ── Mobile overlay backdrop ── */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* ── Main area ── */}
+      <div className="flex flex-1 min-w-0 overflow-hidden">
+        {/* ── Chat panel ── */}
+        <div className="flex flex-col flex-1 min-w-0 border-r border-gray-200 bg-white">
+          {/* Header */}
+          <header className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-shrink-0">
+            {/* Sidebar toggle */}
+            <button
+              aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+              onClick={() => setSidebarOpen((v) => !v)}
+              className="flex-shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+
+            {/* Title / active conversation */}
+            <div className="flex-1 min-w-0">
+              <h1 className="text-sm font-semibold text-gray-900 truncate">
+                {activeConvId
+                  ? (conversations.find((c) => c.id === activeConvId)?.title ??
+                    "Assessment")
+                  : "Claim Assessment AI"}
+              </h1>
             </div>
-          </div>
-        )}
+
+            {/* Streaming indicator */}
+            {isStreaming && (
+              <span className="flex items-center gap-1.5 text-xs text-blue-500 flex-shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                Assessing…
+              </span>
+            )}
+          </header>
+
+          {/* Messages */}
+          <MessageList messages={messages} isStreaming={isStreaming} />
+
+          {/* Workflow step timeline */}
+          {workflowSteps.length > 0 && (
+            <WorkflowTimeline steps={workflowSteps} />
+          )}
+
+          {/* Tool call log */}
+          {toolCalls.length > 0 && <ToolCallLog toolCalls={toolCalls} />}
+
+          {/* Input */}
+          <ChatInput
+            onSend={sendMessage}
+            isStreaming={isStreaming}
+            model={model}
+            onModelChange={setModel}
+            onAbort={() => abortRef.current?.abort()}
+          />
+        </div>
+
+        {/* ── Report panel — persists across conversation switches ── */}
+        <div className="w-80 xl:w-[420px] flex flex-col bg-gray-50 overflow-y-auto flex-shrink-0 border-l border-gray-100">
+          {claimEvents.length > 0 ? (
+            <MultiClaimReportPanel
+              key={streamingEventId ?? "idle"}
+              claimEvents={claimEvents}
+              activeEventId={streamingEventId}
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center p-8 text-center">
+              <div>
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                  <span className="text-gray-400 text-xl">📊</span>
+                </div>
+                <p className="text-sm text-gray-400 font-medium">
+                  No report yet
+                </p>
+                <p className="text-xs text-gray-300 mt-1">
+                  Submit a claim assessment to see the structured report here.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1,40 +1,49 @@
 # CLAUDE.md
 
-You are a senior software engineer.
+You are a senior software engineer working on an AI Claim Assessment Agent.
 
-Project: AI Claim Assessment Agent
+---
 
-Tech Stack:
+## Stack
 
 - Next.js 15
 - TypeScript
-- OpenAI/Claude API
+- OpenAI / Claude API
 - Tailwind CSS
 
-Rules:
+---
 
-- Always analyze requirements before coding
-- Never remove existing features without confirmation
+## Core Rules
+
+- Analyze requirements before coding
+- Do NOT remove features without explicit confirmation
 - Follow clean architecture
 - Use TypeScript strict mode
-- Create reusable components
-- Add comments for complex logic
+- Prefer reusable components
+- Keep logic simple and deterministic
 
-Documentation Rules:
-Whenever implementation changes:
+---
+
+## Documentation Sync (MANDATORY)
+
+On every implementation change:
 
 - Update PROJECT_STATE.md
 - Update SYSTEM_MAP.md
 - Update CHANGELOG.md
 
-Testing Rules:
+---
 
-- Run tests after implementation
+## Testing Rules
+
+- Run tests after changes
 - Fix TypeScript errors
 - Fix ESLint errors
 
-Output Rules:
+---
 
-- Show implementation plan first
-- Then implement
-- Then summarize changes
+## Execution Flow
+
+1. Plan first (short bullet list)
+2. Implement
+3. Summarize changes

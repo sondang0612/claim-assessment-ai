@@ -32,6 +32,11 @@ export const POLICIES: Record<string, Policy> = {
       },
     ],
     exclusions: [],
+    coverageClauses: [
+      { clauseId: 'CV-01', claimType: 'hospitalization', type: 'coverage', description: 'Hospitalization covered at 90% up to $50,000 per claim.' },
+      { clauseId: 'CV-02', claimType: 'surgery', type: 'coverage', description: 'Surgical procedures covered at 90% up to $30,000. Pre-authorization required.' },
+      { clauseId: 'CV-03', claimType: 'emergency', type: 'coverage', description: 'Emergency care covered at 100% up to $10,000. No pre-authorization required.' },
+    ],
     notes: 'Comprehensive plan — full inpatient, surgical, and emergency coverage.',
   },
 
@@ -60,10 +65,15 @@ export const POLICIES: Record<string, Policy> = {
     ],
     exclusions: [
       {
+        clauseId: 'EX-01',
         description: 'Elective and cosmetic procedures are not covered under this plan.',
         claimTypes: ['elective'],
         icdCodes: ['Z41.1', 'Z41.8'],
       },
+    ],
+    coverageClauses: [
+      { clauseId: 'CV-04', claimType: 'hospitalization', type: 'coverage', description: 'Hospitalization covered at 80% up to $40,000 per claim.' },
+      { clauseId: 'CV-05', claimType: 'outpatient', type: 'coverage', description: 'Outpatient services covered at 70% up to $5,000 per claim.' },
     ],
     notes: 'Standard plan — excludes all elective and cosmetic procedures (Section 4.2).',
   },
@@ -92,6 +102,10 @@ export const POLICIES: Record<string, Policy> = {
       },
     ],
     exclusions: [],
+    coverageClauses: [
+      { clauseId: 'CV-06', claimType: 'hospitalization', type: 'coverage', description: 'Hospitalization covered at 85% up to $45,000 per claim.' },
+      { clauseId: 'CV-07', claimType: 'surgery', type: 'coverage', description: 'Surgical procedures covered at 85% up to $25,000. Itemized bill required (Section 3.1).' },
+    ],
     notes: 'Standard Plus plan — requires itemized bill for all surgical claims (Section 3.1).',
   },
 };
