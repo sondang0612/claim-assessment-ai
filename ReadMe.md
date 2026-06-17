@@ -3,7 +3,9 @@
 ## Information
 
 - **Full Name:** Dang Hoang Son
-- **Website:** https://claim-assessment-ai.vercel.app
+- **Website:**
+  - **AI Challenge 01 — Insurance Plan Comparison Page:** https://claim-assessment-ai.vercel.app
+  - **AI Challenge 11 — Claim Assessment AI Agent:** https://insurance-plan-comparison-page.vercel.app
 
 ---
 
@@ -27,16 +29,9 @@ This directory contains my answers to the **Logical Questions**
 
 ## 2. AI Engineering Challenges
 
-This directory contains my solutions to the **AI Engineering Challenges**
+### Content: AI Challenge 1 — Insurance Plan Comparison Page
 
 ### Content: AI Challenge 11 — Claim Assessment AI Agent
-
-- Source code
-- Design documentation
-- Project setup and running instructions
-- Results and technical notes
-
----
 
 ## Directory Structure
 
@@ -46,8 +41,8 @@ This directory contains my solutions to the **AI Engineering Challenges**
 │   └── README.md
 │
 ├── AI_Engineering_Challenges/
-│   ├── README.md
-│   └── source-code/
+│   ├── challenge_1
+│   └── challenge_11
 │
 └── README.md
 ```

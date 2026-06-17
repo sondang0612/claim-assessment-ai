@@ -1,36 +1,99 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Insurance Plan Comparison Page
 
-## Getting Started
+A responsive insurance plan comparison page built with Next.js, TypeScript, and Tailwind CSS.
 
-First, run the development server:
+## Live Demo
+
+**[→ Launch Application](https://insurance-plan-comparison-page.vercel.app)**
+
+## Estimated Timeline
+
+| Task                             | Time     |
+| -------------------------------- | -------- |
+| Requirement analysis             | 20 min   |
+| Data modeling & component design | 30 min   |
+| UI implementation                | 90 min   |
+| Responsive optimization          | 20 min   |
+| Testing & polishing              | 20 min   |
+| Total                            | ~3 hours |
+
+## Features
+
+- Side-by-side comparison of Bronze, Silver, and Gold plans
+- Visual indicators for included and excluded benefits
+- Automatic highlighting of the best value in each comparison row
+- Recommended plan badge based on value-for-money ratio
+- Responsive layout optimized for desktop and mobile
+- Clean and professional insurance-focused UI
+
+## Approach
+
+### Data-Driven Design
+
+The comparison table is generated from structured plan data rather than hardcoded values. This makes it easy to add or modify plans in the future.
+
+### Best Value Highlighting
+
+Each comparison row calculates the strongest offering automatically:
+
+- Highest coverage limits
+- Lowest copay percentage
+- Shortest waiting period
+- Included benefits over unavailable benefits
+
+### Recommended Plan Logic
+
+A recommendation score is calculated based on:
+
+- Coverage limits
+- Included benefits
+- Copay percentage
+- Waiting period
+- Monthly premium
+
+This balances both coverage quality and affordability.
+
+### Responsive Strategy
+
+#### Desktop
+
+- Three plans displayed side-by-side
+- Easy row-by-row comparison
+
+#### Mobile
+
+- Plans stack vertically
+- Maintains readability without horizontal scrolling
+
+````
+
+## Tech Stack
+
+- Next.js
+- TypeScript
+- Tailwind CSS
+
+## Running Locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+````
+
+Open:
+
+```text
+http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## AI Usage
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+AI tools were used to assist with:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Requirement breakdown
+- Component structure planning
+- UI refinement
+- Responsive layout improvements
+- Documentation generation
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All generated code was reviewed, adjusted, and validated manually before submission.
