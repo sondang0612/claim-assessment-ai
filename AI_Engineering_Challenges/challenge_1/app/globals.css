@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@theme {
+  --color-papaya: #FD0052;
+  --color-papaya-pale: #FFF0F4;
+}
