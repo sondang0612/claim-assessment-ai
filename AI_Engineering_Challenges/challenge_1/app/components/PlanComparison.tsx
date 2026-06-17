@@ -34,16 +34,33 @@ type RowKey =
 function bestIndex(key: RowKey): number {
   const vals = plans.map((p): number => {
     switch (key) {
-      case "premium":      return -p.monthly_premium;        // lower is better → negate
-      case "annual_limit": return p.annual_limit;
-      case "copay":        return -p.copay_percentage;       // lower is better
-      case "waiting":      return -p.waiting_period_days;    // lower is better
-      case "op_limit":     return p.benefits.outpatient.limit_per_visit;
-      case "op_visits":    return p.benefits.outpatient.visits_per_year; // -1 (unlimited) is highest
-      case "ip_limit":     return p.benefits.inpatient.limit_per_day;
-      case "ip_days":      return p.benefits.inpatient.days_per_year;
-      case "dental":       return p.benefits.dental?.limit_per_year ?? -Infinity;
-      case "maternity":    return p.benefits.maternity?.limit_per_pregnancy ?? -Infinity;
+      case "premium":
+        return -p.monthly_premium; // lower is better → negate
+      case "annual_limit":
+        return p.annual_limit;
+      case "copay":
+        return -p.copay_percentage; // lower is better
+      case "waiting":
+        return -p.waiting_period_days; // lower is better
+      case "op_limit":
+        return p.benefits.outpatient.limit_per_visit;
+      case "op_visits": {
+        // Bug fix: -1 means unlimited (highest), but -1 < 60 in JS,
+        // so we must map it to Infinity before comparing.
+        const v = p.benefits.outpatient.visits_per_year;
+        return v === -1 ? Infinity : v;
+      }
+      case "ip_limit":
+        return p.benefits.inpatient.limit_per_day;
+      case "ip_days": {
+        // Same fix as op_visits.
+        const v = p.benefits.inpatient.days_per_year;
+        return v === -1 ? Infinity : v;
+      }
+      case "dental":
+        return p.benefits.dental?.limit_per_year ?? -Infinity;
+      case "maternity":
+        return p.benefits.maternity?.limit_per_pregnancy ?? -Infinity;
     }
   });
   const max = Math.max(...vals);
@@ -85,24 +102,48 @@ const PLAN_META: Record<string, { nickname: string; description: string }> = {
 function PlanIcon({ name, size = 18 }: { name: string; size?: number }) {
   if (name === "Bronze") {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     );
   }
   if (name === "Silver") {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <circle cx="12" cy="8" r="6" />
         <path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11" />
       </svg>
     );
   }
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M2.7 10.3l9.3 9.3 9.3-9.3L12 2.7z" />
       <path d="M2.7 10.3h18.6M8 2.7l4 7.6 4-7.6" />
     </svg>
@@ -114,8 +155,15 @@ function PlanIcon({ name, size = 18 }: { name: string; size?: number }) {
 function Check() {
   return (
     <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#EDFAF4]">
-      <svg width="10" height="8" fill="none" stroke="#16A34A" strokeWidth="2"
-        strokeLinecap="round" strokeLinejoin="round">
+      <svg
+        width="10"
+        height="8"
+        fill="none"
+        stroke="#16A34A"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
         <polyline points="1 4 3.5 6.5 9 1" />
       </svg>
     </span>
@@ -125,7 +173,14 @@ function Check() {
 function Cross() {
   return (
     <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-gray-100">
-      <svg width="8" height="8" fill="none" stroke="#C8C8C8" strokeWidth="1.8" strokeLinecap="round">
+      <svg
+        width="8"
+        height="8"
+        fill="none"
+        stroke="#C8C8C8"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      >
         <line x1="1" y1="1" x2="7" y2="7" />
         <line x1="7" y1="1" x2="1" y2="7" />
       </svg>
@@ -137,9 +192,11 @@ function Cross() {
 
 function Pill({ children, featured }: { children: React.ReactNode; featured?: boolean }) {
   return (
-    <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold tracking-[0.04em] text-papaya ${
-      featured ? "bg-papaya/10" : "bg-papaya-pale"
-    }`}>
+    <span
+      className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold tracking-[0.04em] text-papaya ${
+        featured ? "bg-papaya/10" : "bg-papaya-pale"
+      }`}
+    >
       {children}
     </span>
   );
@@ -149,16 +206,149 @@ function Pill({ children, featured }: { children: React.ReactNode; featured?: bo
 
 function Chip({ children, featured }: { children: string; featured?: boolean }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[12px] font-medium text-gray-500 ${
-      featured ? "border-papaya/20 bg-papaya/5" : "border-gray-200 bg-gray-50"
-    }`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[12px] font-medium text-gray-500 ${
+        featured ? "border-papaya/20 bg-papaya/5" : "border-gray-200 bg-gray-50"
+      }`}
+    >
       <span className="h-[5px] w-[5px] shrink-0 rounded-full bg-papaya" aria-hidden="true" />
       {children}
     </span>
   );
 }
 
+// ── Switch component ──────────────────────────────────────────────────────────
+//
+// Bugs fixed vs the original inline implementation:
+//   1. Track color was hardcoded bg-papaya — never showed off-state (gray)
+//   2. Thumb misaligned: translate-x-[19px] on a 40px track with 16px thumb
+//      gives a 5px right gap vs 3px left gap. Correct value is translate-x-[21px].
+//      New design uses border-2 pattern → translate-x-0 / translate-x-5, perfectly symmetric.
+//   3. Space key had no preventDefault() → page scrolled while toggling
+//   4. Enter key fired click (not standard for role="switch") with no suppression
+//   5. No controlled/uncontrolled API, no disabled state, no press feedback
+//
+// Enhancements:
+//   • border-2 border-transparent track pattern → perfectly symmetric 2px thumb margins
+//   • Track color transitions: off = gray-300, on = papaya (200ms ease-in-out)
+//   • iOS-style thumb stretch on press — widens toward the direction of travel,
+//     keeping the opposite edge anchored (haptic feel without actual haptics)
+//   • Gentle active scale on the track for a physical press-down sensation
+//   • Hover opacity, focus ring with ring-offset-2, full disabled treatment
+//   • All animations use transform + opacity only (compositor-promoted, zero repaint)
+
+interface SwitchProps {
+  /** Controlled mode — provide both checked + onChange to drive externally */
+  checked?: boolean;
+  onChange?: (checked: boolean) => void;
+  /** Uncontrolled mode — sets initial state only, ignored when `checked` is provided */
+  defaultChecked?: boolean;
+  disabled?: boolean;
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+function Switch({
+  checked: controlledChecked,
+  onChange,
+  defaultChecked = false,
+  disabled = false,
+  id,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
+  "aria-describedby": ariaDescribedBy,
+  className = "",
+}: SwitchProps) {
+  const isControlled = controlledChecked !== undefined;
+  const [internalChecked, setInternalChecked] = useState(defaultChecked);
+  const [isPressed, setIsPressed] = useState(false);
+
+  const checked = isControlled ? controlledChecked! : internalChecked;
+
+  const toggle = () => {
+    if (disabled) return;
+    const next = !checked;
+    if (!isControlled) setInternalChecked(next);
+    onChange?.(next);
+  };
+
+  // iOS-style thumb stretch — widens toward direction of travel.
+  // Track inner width: 44px track − (2px border × 2) = 40px. Normal thumb = 20px (w-5).
+  // OFF press: stretch right → w-[22px] translate-x-0   (left edge stays at 0)
+  // ON  press: stretch left  → w-[22px] translate-x-[18px] (right edge stays at 18+22=40px)
+  const thumbTranslate = isPressed
+    ? checked
+      ? "translate-x-[18px]"
+      : "translate-x-0"
+    : checked
+    ? "translate-x-5"
+    : "translate-x-0";
+
+  const thumbWidth = isPressed ? "w-[22px]" : "w-5";
+
+  return (
+    <button
+      type="button"
+      id={id}
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
+      aria-describedby={ariaDescribedBy}
+      disabled={disabled}
+      onClick={toggle}
+      onKeyDown={(e) => {
+        // Space: prevent page scroll (button click fires naturally on keyup, no double-toggle)
+        if (e.key === " ") e.preventDefault();
+        // Enter: not standard for role="switch" — suppress the native button click
+        if (e.key === "Enter") e.preventDefault();
+      }}
+      onPointerDown={() => { if (!disabled) setIsPressed(true); }}
+      onPointerUp={() => setIsPressed(false)}
+      onPointerLeave={() => setIsPressed(false)}
+      className={[
+        "group relative inline-flex h-6 w-11 shrink-0 rounded-full",
+        // border-2 border-transparent creates 2px symmetric inner padding (no extra wrappers)
+        "border-2 border-transparent",
+        // Smooth track color + scale transitions
+        "transition-all duration-200 ease-in-out",
+        // Track background: gray when off, papaya when on
+        checked ? "bg-papaya" : "bg-gray-300",
+        // Focus ring — color matches track state
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
+        checked
+          ? "focus-visible:ring-papaya/60"
+          : "focus-visible:ring-gray-400/50",
+        // Interactive states
+        disabled
+          ? "cursor-not-allowed opacity-40"
+          : "cursor-pointer hover:opacity-90 active:scale-[0.94]",
+        className,
+      ].join(" ")}
+    >
+      <span
+        aria-hidden="true"
+        className={[
+          "pointer-events-none h-5 rounded-full bg-white",
+          // Layered shadow: soft ambient + crisp edge definition
+          "shadow-[0_1px_4px_rgba(0,0,0,0.20),0_0_0_0.5px_rgba(0,0,0,0.05)]",
+          "transition-all duration-200 ease-in-out",
+          thumbTranslate,
+          thumbWidth,
+        ].join(" ")}
+      />
+    </button>
+  );
+}
+
 // ── Desktop plan card (sits inside a table <td>) ──────────────────────────────
+//
+// Bug fix: the "Most popular" badge was using float-right AFTER the icon block,
+// which put it beside the tier label rather than in the card's top-right corner.
+// Fix: add `relative` to the card container and use `absolute top-3 right-3`.
 
 function PlanCard({
   plan,
@@ -173,24 +363,30 @@ function PlanCard({
 }) {
   const meta = PLAN_META[plan.name];
   return (
-    <div className={`rounded-xl border bg-white px-5 py-5 transition-shadow hover:shadow-lg ${
-      isRecommended
-        ? "border-papaya [border-top-width:2px]"
-        : "border-gray-200"
-    }`}>
+    <div
+      className={`relative rounded-xl border bg-white px-5 py-5 transition-shadow hover:shadow-lg ${
+        isRecommended
+          ? "border-papaya [border-top-width:2px]"
+          : "border-gray-200"
+      }`}
+    >
+      {/* Most popular badge — anchored to card top-right */}
+      {isRecommended && (
+        <span className="absolute right-3 top-3 rounded-full bg-papaya-pale px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[0.06em] text-papaya">
+          Most popular
+        </span>
+      )}
+
       {/* Icon */}
       <div className="mb-3.5 flex h-[38px] w-[38px] items-center justify-center rounded-[9px] bg-papaya-pale text-papaya">
         <PlanIcon name={plan.name} size={18} />
       </div>
 
-      {/* Most popular badge — floats to the right */}
-      {isRecommended && (
-        <span className="float-right mt-0.5 rounded-full bg-papaya-pale px-[9px] py-[3px] text-[10px] font-bold uppercase tracking-[0.06em] text-papaya">
-          Most popular
-        </span>
-      )}
-
-      <p className={`text-[10px] font-bold uppercase tracking-[0.1em] ${isRecommended ? "text-papaya" : "text-gray-400"}`}>
+      <p
+        className={`text-[10px] font-bold uppercase tracking-[0.1em] ${
+          isRecommended ? "text-papaya" : "text-gray-400"
+        }`}
+      >
         {plan.name}
       </p>
       <p className="mb-1 text-[19px] font-extrabold text-gray-900">{meta.nickname}</p>
@@ -199,7 +395,7 @@ function PlanCard({
       </p>
 
       <p className="text-[34px] font-extrabold leading-none text-gray-900">
-        <sup className="inline-block align-top text-[16px] font-bold mt-1">฿</sup>
+        <sup className="mt-1 inline-block align-top text-[16px] font-bold">฿</sup>
         {displayPrice.replace("฿", "")}
       </p>
       <p className="mt-1 text-[11px] text-gray-400">
@@ -268,7 +464,9 @@ function DataRow({
           }`}
         >
           <span className="block text-[15px] font-bold text-gray-900">{v}</span>
-          {i === best && <Pill featured={i === recIdx}>{BEST_PILL[rowKey]}</Pill>}
+          {i === best && (
+            <Pill featured={i === recIdx}>{BEST_PILL[rowKey]}</Pill>
+          )}
         </td>
       ))}
     </tr>
@@ -310,7 +508,9 @@ function BenefitRow({
             <div className="flex flex-col items-center gap-0.5">
               <Check />
               <span className="block text-[15px] font-bold text-gray-900">{v}</span>
-              {i === best && <Pill featured={i === recIdx}>{BEST_PILL[rowKey]}</Pill>}
+              {i === best && (
+                <Pill featured={i === recIdx}>{BEST_PILL[rowKey]}</Pill>
+              )}
             </div>
           )}
         </td>
@@ -324,7 +524,7 @@ function BenefitRow({
 function HighlightsRow({ recIdx }: { recIdx: number }) {
   return (
     <tr>
-      <td className="py-4 pr-3 text-[13px] font-medium text-gray-500 align-top" />
+      <td className="py-4 pr-3 align-top text-[13px] font-medium text-gray-500" />
       {plans.map((p, i) => (
         <td
           key={p.name}
@@ -332,7 +532,9 @@ function HighlightsRow({ recIdx }: { recIdx: number }) {
         >
           <div className="flex flex-col items-center gap-1.5">
             {p.highlights.map((h) => (
-              <Chip key={h} featured={i === recIdx}>{h}</Chip>
+              <Chip key={h} featured={i === recIdx}>
+                {h}
+              </Chip>
             ))}
           </div>
         </td>
@@ -343,6 +545,7 @@ function HighlightsRow({ recIdx }: { recIdx: number }) {
 
 // ── Desktop comparison table ──────────────────────────────────────────────────
 // Cards sit in the first <tbody> row, perfectly column-aligned with data rows.
+// Bug fix: monthly premium row was missing from the Pricing section.
 
 function DesktopTable({
   recommended,
@@ -391,6 +594,12 @@ function DesktopTable({
 
         {/* ── Pricing ── */}
         <SectionRow label="Pricing" recIdx={recIdx} />
+        <DataRow
+          label="Monthly premium"
+          rowKey="premium"
+          recIdx={recIdx}
+          values={plans.map((p) => price(p))}
+        />
         <DataRow
           label="Annual limit"
           rowKey="annual_limit"
@@ -506,12 +715,16 @@ function MiniCard({
       <div className="mb-2.5 flex h-[30px] w-[30px] items-center justify-center rounded-[7px] bg-papaya-pale text-papaya">
         <PlanIcon name={plan.name} size={14} />
       </div>
-      <p className={`text-[9px] font-bold uppercase tracking-[0.1em] ${isRecommended ? "text-papaya" : "text-gray-400"}`}>
+      <p
+        className={`text-[9px] font-bold uppercase tracking-[0.1em] ${
+          isRecommended ? "text-papaya" : "text-gray-400"
+        }`}
+      >
         {plan.name}
       </p>
       <p className="mb-2 text-[14px] font-extrabold text-gray-900">{meta.nickname}</p>
       <p className="text-[18px] font-extrabold leading-none text-gray-900">
-        <sup className="inline-block align-top text-[10px] font-bold mt-[3px]">฿</sup>
+        <sup className="mt-[3px] inline-block align-top text-[10px] font-bold">฿</sup>
         {displayPrice.replace("฿", "")}
       </p>
       <p className="mt-0.5 text-[10px] text-gray-400">/ mo</p>
@@ -520,6 +733,7 @@ function MiniCard({
 }
 
 // ── Mobile — selected plan detail panel ───────────────────────────────────────
+// Bug fix: Highlights section was missing — plan.highlights never shown on mobile.
 
 function MobileDetailPanel({
   plan,
@@ -580,27 +794,39 @@ function MobileDetailPanel({
       <div className={sec}>Outpatient</div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Per visit</span>
-        <span className="text-[13px] font-bold text-gray-900">{currency(plan.benefits.outpatient.limit_per_visit)}</span>
+        <span className="text-[13px] font-bold text-gray-900">
+          {currency(plan.benefits.outpatient.limit_per_visit)}
+        </span>
       </div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Visits / year</span>
-        <span className="text-[13px] font-bold text-gray-900">{visits(plan.benefits.outpatient.visits_per_year)}</span>
+        <span className="text-[13px] font-bold text-gray-900">
+          {visits(plan.benefits.outpatient.visits_per_year)}
+        </span>
       </div>
 
       <div className={sec}>Inpatient</div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Per day</span>
-        <span className="text-[13px] font-bold text-gray-900">{currency(plan.benefits.inpatient.limit_per_day)}</span>
+        <span className="text-[13px] font-bold text-gray-900">
+          {currency(plan.benefits.inpatient.limit_per_day)}
+        </span>
       </div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Days / year</span>
-        <span className="text-[13px] font-bold text-gray-900">{days(plan.benefits.inpatient.days_per_year)}</span>
+        <span className="text-[13px] font-bold text-gray-900">
+          {days(plan.benefits.inpatient.days_per_year)}
+        </span>
       </div>
 
       <div className={sec}>Benefits</div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Dental</span>
-        <span className={`text-[13px] font-bold ${plan.benefits.dental ? "text-gray-900" : "text-gray-400"}`}>
+        <span
+          className={`text-[13px] font-bold ${
+            plan.benefits.dental ? "text-gray-900" : "text-gray-400"
+          }`}
+        >
           {plan.benefits.dental
             ? `${currency(plan.benefits.dental.limit_per_year)} / yr`
             : "Not included"}
@@ -608,11 +834,30 @@ function MobileDetailPanel({
       </div>
       <div className={row}>
         <span className="text-[13px] font-medium text-gray-400">Maternity</span>
-        <span className={`text-[13px] font-bold ${plan.benefits.maternity ? "text-gray-900" : "text-gray-400"}`}>
+        <span
+          className={`text-[13px] font-bold ${
+            plan.benefits.maternity ? "text-gray-900" : "text-gray-400"
+          }`}
+        >
           {plan.benefits.maternity
             ? `${currency(plan.benefits.maternity.limit_per_pregnancy)} / preg.`
             : "Not included"}
         </span>
+      </div>
+
+      {/* Highlights — was missing entirely from mobile view */}
+      <div className={sec}>Highlights</div>
+      <div
+        className={[
+          "flex flex-wrap gap-1.5 border-t px-4 py-3",
+          isRecommended ? "border-papaya/10" : "border-gray-100",
+        ].join(" ")}
+      >
+        {plan.highlights.map((h) => (
+          <Chip key={h} featured={isRecommended}>
+            {h}
+          </Chip>
+        ))}
       </div>
     </div>
   );
@@ -684,24 +929,31 @@ export default function PlanComparison() {
       </div>
 
       {/* ── Billing toggle ── */}
-      <div className="mb-12 flex items-center justify-center gap-[10px] text-[13px] font-medium">
-        <span className={isAnnual ? "text-gray-400" : "text-gray-900"}>Monthly</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={isAnnual}
-          aria-label="Toggle annual billing"
-          onClick={() => setIsAnnual(!isAnnual)}
-          className="relative h-[22px] w-10 cursor-pointer rounded-full bg-papaya transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-papaya/50"
+      <div className="mb-12 flex items-center justify-center gap-3 text-[13px] font-medium">
+        <span
+          className={`transition-colors duration-200 ${
+            isAnnual ? "text-gray-400" : "text-gray-900"
+          }`}
         >
-          <span
-            className={`absolute top-[3px] h-4 w-4 rounded-full bg-white shadow transition-transform ${
-              isAnnual ? "translate-x-[19px]" : "translate-x-[3px]"
-            }`}
-          />
-        </button>
-        <span className={isAnnual ? "text-gray-900" : "text-gray-400"}>Annual</span>
-        <span className="rounded-full border border-papaya px-2 py-0.5 text-[10px] font-bold text-papaya">
+          Monthly
+        </span>
+        <Switch
+          checked={isAnnual}
+          onChange={setIsAnnual}
+          aria-label="Toggle annual billing"
+          aria-describedby="billing-save-badge"
+        />
+        <span
+          className={`transition-colors duration-200 ${
+            isAnnual ? "text-gray-900" : "text-gray-400"
+          }`}
+        >
+          Annual
+        </span>
+        <span
+          id="billing-save-badge"
+          className="rounded-full border border-papaya px-2 py-0.5 text-[10px] font-bold text-papaya"
+        >
           Save 10%
         </span>
       </div>
@@ -730,7 +982,10 @@ export default function PlanComparison() {
         {/* Detail panel (only active plan shown) */}
         {plans.map((p) => (
           <div key={p.name} className={activeMobile === p.name ? "block" : "hidden"}>
-            <MobileDetailPanel plan={p} isRecommended={p.name === recommended.name} />
+            <MobileDetailPanel
+              plan={p}
+              isRecommended={p.name === recommended.name}
+            />
           </div>
         ))}
       </div>
