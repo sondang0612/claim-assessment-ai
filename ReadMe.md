@@ -4,8 +4,8 @@
 
 - **Full Name:** Dang Hoang Son
 - **Website:**
-  - **AI Challenge 01 — Insurance Plan Comparison Page:** https://claim-assessment-ai.vercel.app
-  - **AI Challenge 11 — Claim Assessment AI Agent:** https://insurance-plan-comparison-page.vercel.app
+  - **AI Challenge 01 — Insurance Plan Comparison Page:** https://insurance-plan-comparison-page.vercel.app
+  - **AI Challenge 11 — Claim Assessment AI Agent:** https://claim-assessment-ai.vercel.app
 
 ---
 
